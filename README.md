@@ -1,50 +1,55 @@
 # HexBound - Hex-Grid Strategy Game
 
-HexBound is a browser-based, single-player strategy game inspired by classic hex-grid board games. Built using vanilla JavaScript and HTML5 Canvas, it focuses on clean logic and local performance.
+HexBound is a browser-based, single-player strategy game inspired by classic hex-grid board games. Built using vanilla JavaScript and HTML5 Canvas, it focuses on clean logic, interactive feedback, and local performance.
 
 ## 🚀 Quick Start
 
 1.  Open `index.html` in any modern web browser.
-2.  Follow the on-screen instructions for the **Initial Phase**.
-3.  Objective: Be the first player to reach **10 Victory Points**.
+2.  Configure your game in the **Start Menu**:
+    *   **AI Opponents**: Play against 1 to 3 AI players.
+    *   **Board Size**: Choose from Small (7 hexes), Standard (19 hexes), or Large (37 hexes).
+    *   **Victory Points**: Set your goal from 3 to 25 points.
+    *   **Friendly Robber**: Protect players with 2 points or fewer from the Robber.
+3.  Click **Start Game** and follow the on-screen instructions for the **Initial Phase**.
 
-## 🎮 Game Phases
+## 🎮 Controls
+
+*   **🖱️ Pan**: Click and drag your mouse to move the board.
+*   **🔍 Zoom**: Use the **Mouse Wheel** to zoom in and out (centered on your cursor).
+*   **🔄 Reset View**: Click the **Reset View** button in the control panel to return to the default view.
+*   **🛠️ Build**: Click **Vertices** to build Settlements/Cities and **Edges** to build Roads. Valid build locations pulse with a cyan glow.
+
+## 🎲 Game Layers
 
 ### 1. Initial Phase (Snake Order)
-*   Each player places 2 Settlements and 2 Roads.
-*   The turn order follows a "snake" pattern: Player 1-2-3-4, then 4-3-2-1.
-*   **Action**: Click an empty vertex for a Settlement, then click an adjacent edge for a Road.
+*   Players place 2 Settlements and 2 Roads in a "snake" pattern (e.g., 1-2-3-3-2-1).
+*   The second settlement placement grants immediate resources from adjacent hexes.
 
 ### 2. Play Phase
-*   **Roll Dice**: Determine which hexes produce resources.
-*   **Collect Resources**: 
-    *   **Wood**: Forests
-    *   **Brick**: Hills
-    *   **Sheep**: Pastures
-    *   **Wheat**: Fields
-    *   **Ore**: Mountains
-*   **Build**: Use resources to expand your network.
-*   **End Turn**: Pass control to the next player.
+*   **Roll Dice**: Determine which hexes produce resources based on their assigned number.
+*   **The Robber (7)**: If a 7 is rolled, players with more than 7 resources must discard half. The current player then moves the Robber to a new hex, blocking its production.
+*   **Bank Trading (4:1)**: Use the dedicated **Bank Trade** panel to exchange 4 of one resource for 1 of another. The UI dynamically highlights affordable options.
+*   **Build & Expand**: Spend resources to build Roads, Settlements, and Cities.
+    *   **Roads**: 1 Wood, 1 Brick
+    *   **Settlement (1 VP)**: 1 Wood, 1 Brick, 1 Sheep, 1 Wheat
+    *   **City (2 VP)**: 3 Ore, 2 Wheat (Upgrades an existing Settlement)
 
-## 📜 Building Rules
+## ✨ Features
 
-*   **Settlements (1 VP)**: Must be at least two edges away from any other structure (yours or AI's). Must connect to your road network.
-*   **Roads**: Must connect to your existing settlements, cities, or roads.
-*   **Cities (2 VP)**: Upgraded from existing settlements. They produce **double** resources.
-
-## ⚖️ Current Limitations
-
-As a prototype, several advanced features of standard hex games are omitted:
-*   **No Trading**: You must rely solely on your own resource production.
-*   **Simplified AI**: AI players will perform their initial placements but only roll and end their turn during the play phase. They do not build or strategize.
-*   **No Robber**: Rolling a 7 skips resource distribution but does not trigger a robber move or resource theft.
-*   **No Development Cards**: Action cards and "Largest Army" bonuses are not included.
-*   **No Ports/Maritime Trade**: Resource exchange is not available.
-*   **Single Session**: No saving or loading is supported.
+*   **Reactive UI**: Trade buttons and build highlights update in real-time as your resources change.
+*   **Visual Affordance**: Buildable locations pulse with cyan highlights, and settlement upgrades glow gold when affordable.
+*   **Dynamic Board Generation**: Procedurally generated maps that scale based on your chosen size.
+*   **Friendly Robber**: Optional setting to prevent "bullying" players who haven't gained more than 2 victory points.
+*   **Clean Architecture**: Separation of concerns between `Board` logic, `GameState`, and the `CanvasRenderer`.
 
 ## 🛠 Technical Details
 
-*   **Logic**: Uses Axial $(q, r)$ coordinates for hex-grid math.
-*   **Rendering**: 100% HTML5 Canvas with geometric primitives.
-*   **Architecture**: Strict separation between `GameState` (logic) and `CanvasRenderer` (visuals).
-*   **Portability**: Monolithic `main.js` to bypass `file://` protocol CORS restrictions, allowing the game to run locally without a server.
+*   **Coordinates**: Uses Axial $(q, r)$ coordinate math for efficient hex-grid operations.
+*   **Zero Dependencies**: Procedural generation and rendering using 100% vanilla JavaScript and HTML5 Canvas.
+*   **Portability**: Monolithic file structure prevents `file://` protocol CORS issues, making it playable directly from your local filesystem.
+
+## ⚖️ Roadmap & Limitations
+
+*   **AI Strategy**: Current AI players roll dice and move the Robber strategically, but do not yet build structures.
+*   **Development Cards**: Future updates will include "Knight" and "Victory Point" cards.
+*   **Port Trading**: Specialized 2:1 and 3:1 maritime trade routes at the board edges.
