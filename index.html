@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HexBound - Strategy Board Game</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #2c3e50;
+            color: #ecf0f1;
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        #game-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        canvas {
+            display: block;
+            background-color: #34495e;
+            cursor: pointer;
+        }
+
+        #ui-overlay {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(44, 62, 80, 0.9);
+            padding: 15px;
+            border: 2px solid #fff;
+            color: #fff;
+            pointer-events: none;
+            width: 200px;
+        }
+
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 10px;
+            background: rgba(0,0,0,0.5);
+            padding: 10px;
+            border-radius: 8px;
+        }
+
+        button {
+            padding: 12px 24px;
+            font-size: 16px;
+            font-weight: bold;
+            background-color: #2ecc71;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+
+        button:hover { background-color: #27ae60; }
+        button:disabled { background-color: #95a5a6; cursor: not-allowed; }
+
+        .rules-hint {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(0,0,0,0.8);
+            padding: 15px;
+            font-size: 13px;
+            max-width: 350px;
+            border: 1px solid #7f8c8d;
+            border-radius: 4px;
+            line-height: 1.4;
+        }
+
+        .rules-hint strong {
+            display: block;
+            margin-bottom: 8px;
+            color: #f1c40f;
+            text-decoration: underline;
+        }
+
+        .rules-hint ul {
+            margin: 0;
+            padding-left: 18px;
+        }
+
+        .rules-hint li {
+            margin-bottom: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+        <div id="controls">
+            <button id="rollBtn" disabled>Roll Dice</button>
+            <button id="endBtn" disabled>End Turn</button>
+        </div>
+        <div class="rules-hint">
+            <strong>QUICK RULES</strong>
+            <ul>
+                <li><strong>Initial Phase:</strong> Click a vertex for settlement, then an adjacent edge for a road. Repeats twice.</li>
+                <li><strong>Turn Flow:</strong> Roll Dice &rarr; Distribute Resources &rarr; Build &rarr; End Turn.</li>
+                <li><strong>Building:</strong> Settlement must be 2 edges away from any other structure.</li>
+                <li><strong>Costs:</strong>
+                    <br>&bull; Road: 1 Wood, 1 Brick
+                    <br>&bull; Settlement: 1 Wood, 1 Brick, 1 Sheep, 1 Wheat
+                    <br>&bull; City: 3 Ore, 2 Wheat (Upgrades Settlement)
+                </li>
+                <li><strong>Victory:</strong> Reach 10 points (Settlement=1, City=2).</li>
+            </ul>
+        </div>
+    </div>
+    <script src="main.js"></script>
+</body>
+</html>
