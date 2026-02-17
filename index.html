@@ -29,18 +29,6 @@
             cursor: pointer;
         }
 
-        #ui-overlay {
-            position: absolute;
-            top: 10px;
-            right: 10px;
-            background: rgba(44, 62, 80, 0.9);
-            padding: 15px;
-            border: 2px solid #fff;
-            color: #fff;
-            pointer-events: none;
-            width: 200px;
-        }
-
         #controls {
             position: absolute;
             bottom: 20px;
@@ -78,21 +66,65 @@
         .rules-hint {
             position: absolute;
             bottom: 20px;
-            right: 20px;
-            background: rgba(0,0,0,0.8);
+            right: 0;
+            background: rgba(0,0,0,0.85);
             padding: 15px;
             font-size: 13px;
-            max-width: 350px;
+            width: 320px;
             border: 1px solid #7f8c8d;
-            border-radius: 4px;
+            border-right: none;
+            border-radius: 8px 0 0 8px;
             line-height: 1.4;
+            transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            z-index: 100;
+        }
+
+        .rules-hint.collapsed {
+            transform: translateX(100%);
+        }
+
+        #rulesHandle {
+            position: absolute;
+            left: -40px;
+            top: 0;
+            width: 40px;
+            height: 120px;
+            background: #2c3e50;
+            border: 1px solid #7f8c8d;
+            border-right: none;
+            border-radius: 8px 0 0 8px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #f1c40f;
+            font-weight: bold;
+            font-size: 16px;
+            box-shadow: -2px 0 5px rgba(0,0,0,0.3);
+            writing-mode: vertical-lr; /* Vertical text on the handle */
+            text-align: center;
+        }
+
+        #rulesHandle:hover {
+            background: #34495e;
+        }
+
+        .rules-header {
+            display: block;
+            margin-bottom: 12px;
+            color: #f1c40f;
+            font-weight: bold;
+            font-size: 15px;
+            border-bottom: 1px solid #7f8c8d;
+            padding-bottom: 5px;
         }
 
         .rules-hint strong {
-            display: block;
-            margin-bottom: 8px;
             color: #f1c40f;
-            text-decoration: underline;
+        }
+
+        .rules-hint strong {
+            color: #f1c40f;
         }
 
         .rules-hint ul {
@@ -173,6 +205,8 @@
                     <option value="1">1 AI</option>
                     <option value="2">2 AIs</option>
                     <option value="3" selected>3 AIs</option>
+                    <option value="4">4 AIs</option>
+                    <option value="5">5 AIs</option>
                 </select>
             </div>
             <div class="option-group">
@@ -184,6 +218,14 @@
                 </select>
             </div>
             <div class="option-group">
+                <label>AI Difficulty</label>
+                <select id="aiDifficulty">
+                    <option value="Beginner">Beginner (Slow & Random)</option>
+                    <option value="Skilled" selected>Skilled (Balanced Strategy)</option>
+                    <option value="Master">Master (Aggressive & Strategic)</option>
+                </select>
+            </div>
+            <div class="option-group">
                 <label>Victory Points to Win: <span id="winPointsValue">10</span></label>
                 <input type="range" id="winPoints" min="3" max="25" value="10" style="padding:0; margin-top:10px;">
                 <small id="winLimitHint" style="display:block;margin-top:5px;color:#95a5a6;font-size:12px;">Based on Board Size</small>
@@ -191,6 +233,10 @@
             <div class="option-group" style="display: flex; align-items: center; gap: 10px;">
                 <input type="checkbox" id="friendlyRobber" style="width: 20px;">
                 <label style="margin-bottom: 0;">Friendly Robber (Safe at 2 pts)</label>
+            </div>
+            <div class="option-group" style="display: flex; align-items: center; gap: 10px;">
+                <input type="checkbox" id="onlyBots" style="width: 20px;">
+                <label style="margin-bottom: 0;">Only Bots Mode (Auto-Battle)</label>
             </div>
             <button id="startGameBtn">Start Game</button>
         </div>
@@ -212,13 +258,21 @@
                   <div id="trade-get-label" style="font-size: 10px; color: #aaa; text-align: center; display: none;">2. Select what to GET</div>
                   <div id="trade-get" style="display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; display: none;"></div>
                 </div>
+                <!-- Robber Selection UI -->
+                <div id="robber-panel" style="display:none; background: rgba(44, 62, 80, 0.95); padding: 15px; border: 2px solid #e74c3c; border-radius: 8px; flex-direction: column; gap: 10px; align-items: center; box-shadow: 0 0 15px rgba(0,0,0,0.5);">
+                    <div style="color: #e74c3c; font-weight: bold; font-size: 16px;">ROBBER SELECTION</div>
+                    <div style="color: #fff; font-size: 14px;">Choose a player to steal from:</div>
+                    <div id="robber-victims" style="display: flex; gap: 10px;"></div>
+                </div>
             </div>
-            <div class="rules-hint">
-                <strong>QUICK RULES</strong>
+            <div class="rules-hint" id="rulesHint">
+                <div id="rulesHandle" onclick="document.getElementById('rulesHint').classList.toggle('collapsed')">RULES</div>
+                <div class="rules-header">QUICK RULES</div>
                 <ul>
                     <li><strong>Initial Phase:</strong> Click a vertex for settlement, then an adjacent edge for a road. Repeats twice.</li>
                     <li><strong>Turn Flow:</strong> Roll Dice &rarr; Distribute Resources &rarr; Build &rarr; End Turn.</li>
                     <li><strong>The Robber:</strong> Rolling a 7 lets you move the Robber. It blocks resource production on that tile.</li>
+                    <li><strong>Longest Road:</strong> Be the first to build a continuous path of 5+ roads to get 2 bonus VP. If someone builds a longer path, they take the bonus!</li>
                     <li><strong>Bank Trade:</strong> Trade 4 of any resource for 1 of your choice (if you have enough).</li>
                     <li><strong>Building:</strong> Settlement must be 2 edges away from any other structure.</li>
                     <li><strong>Costs:</strong>
