@@ -41,6 +41,7 @@
             background: rgba(0,0,0,0.5);
             padding: 10px;
             border-radius: 8px;
+            z-index: 1600;
         }
 
         .main-btns {
@@ -76,7 +77,7 @@
             border-radius: 8px 0 0 8px;
             line-height: 1.4;
             transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-            z-index: 100;
+            z-index: 1600;
         }
 
         .rules-hint.collapsed {
@@ -193,9 +194,97 @@
         #game-interface {
             display: none; /* Hidden until game starts */
         }
+
+        /* Modal Centering & Backdrop */
+        .modal-backdrop {
+            position: fixed;
+            top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0,0,0,0.35);
+            backdrop-filter: blur(2px);
+            z-index: 1500;
+            display: none;
+        }
+
+        #trade-panel, #player-trade-panel, #trade-offer-panel, #robber-panel, #discard-panel, #victory-panel {
+            position: fixed !important;
+            top: 50% !important;
+            left: 50% !important;
+            transform: translate(-50%, -50%) !important;
+            z-index: 2000 !important;
+            margin: 0 !important;
+            pointer-events: auto !important;
+        }
+
+        /* Mobile Adjustments */
+        @media screen and (max-width: 600px) {
+            #menu-overlay {
+                padding: 10px;
+                overflow-y: auto;
+                justify-content: flex-start;
+                align-items: flex-start;
+            }
+            .menu-card {
+                padding: 15px;
+                width: 90%;
+                margin: 20px auto;
+            }
+            .menu-card h1 {
+                font-size: 24px;
+                margin-bottom: 10px;
+            }
+            .option-group {
+                margin-bottom: 10px;
+            }
+            .option-group label {
+                font-size: 12px;
+            }
+            .option-group select, .option-group input {
+                padding: 6px;
+                font-size: 14px;
+            }
+            #startGameBtn {
+                padding: 10px;
+                font-size: 14px;
+                width: 100%;
+            }
+            #controls {
+                bottom: 80px; /* Bring buttons up a bit */
+                padding: 5px;
+                width: auto;
+                background: rgba(0,0,0,0.7);
+            }
+            .main-btns {
+                gap: 5px;
+            }
+            button {
+                padding: 8px 10px;
+                font-size: 11px;
+            }
+            .rules-hint {
+                width: 200px;
+                font-size: 11px;
+            }
+            #trade-panel, #player-trade-panel {
+                width: 90vw !important;
+                max-width: 320px;
+                padding: 10px !important;
+            }
+            #trade-panel select, #player-trade-panel select {
+                padding: 5px;
+                font-size: 12px;
+            }
+            .trade-row {
+                font-size: 11px;
+            }
+            #trade-offer-panel {
+                width: 90vw !important;
+                max-width: 320px;
+                padding: 10px !important;
+            }
+        }
     </style>
 </head>
-<body>
+<body style="touch-action: none;">
     <div id="menu-overlay">
         <div class="menu-card">
             <h1>HEXBOUND</h1>
@@ -243,26 +332,86 @@
     </div>
 
     <div id="game-interface">
+        
+        <!-- Center-Screen Modals -->
+        <div id="trade-panel" style="display:none; background: rgba(0,0,0,1.0); padding: 20px; border-radius: 12px; flex-direction: column; gap: 15px; width: 360px; border: 2px solid #f1c40f; box-shadow: 0 0 50px rgba(0,0,0,0.8);">
+            <div style="font-size: 18px; color: #f1c40f; font-weight: bold; text-align: center; letter-spacing: 1px;">BANK TRADE</div>
+            <div style="font-size: 12px; color: #aaa; text-align: center;">1. Select what to GIVE</div>
+            <div id="trade-give" style="display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; padding-bottom: 5px;"></div>
+            <div id="trade-get-label" style="font-size: 12px; color: #aaa; text-align: center; display: none;">2. Select what to GET</div>
+            <div id="trade-get" style="display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; display: none;"></div>
+            <button onclick="isTradingWithBank=false" style="background: #7f8c8d; width: 100%; margin-top: 10px;">Close</button>
+        </div>
+
+        <div id="player-trade-panel" style="display:none; background: rgba(44, 62, 80, 0.98); padding: 20px; border-radius: 12px; border: 2px solid #e67e22; flex-direction: column; gap: 15px; width: 320px; box-shadow: 0 50px 100px rgba(0,0,0,0.5);">
+            <div style="font-weight: bold; color: #e67e22; text-align: center; font-size: 18px;">PROPOSE TRADE</div>
+            <div id="trade-target-selector" style="display: flex; flex-direction: column; gap: 5px;">
+                <label style="font-size: 12px; color: #aaa;">Target Player:</label>
+                <select id="tradeTarget" style="background: #2c3e50; color: white; border: 1px solid #7f8c8d; padding: 5px; border-radius: 4px;"></select>
+            </div>
+            <div style="display: flex; justify-content: space-between; gap: 10px;">
+                <div style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 8px;">
+                    <div style="font-size: 11px; color: #2ecc71; font-weight: bold;">GIVE (YOU)</div>
+                    <div id="trade-give-controls" style="display:flex; flex-direction:column; gap:4px; width: 100%;"></div>
+                </div>
+                <div style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 8px;">
+                    <div style="font-size: 11px; color: #e74c3c; font-weight: bold;">GET (THEM)</div>
+                    <div id="trade-get-controls" style="display:flex; flex-direction:column; gap:4px; width: 100%;"></div>
+                </div>
+            </div>
+            <div style="display: flex; gap: 10px; margin-top: 10px;">
+                <button id="sendTradeBtn" style="flex: 1; padding: 10px; background: #2ecc71; font-size: 13px;">Send</button>
+                <button id="cancelTradeBtn" style="flex: 1; padding: 10px; background: #e74c3c; font-size: 13px;">Cancel</button>
+            </div>
+        </div>
+
+        <div id="trade-offer-panel" style="display:none; background: rgba(30,30,30,0.95); padding: 20px; border-radius: 12px; border: 2px solid #f1c40f; width: 300px; box-shadow: 0 50px 100px rgba(0,0,0,0.5);">
+            <div id="trade-offer-player" style="font-weight: bold; font-size: 16px; margin-bottom: 10px; color: #f1c40f;"></div>
+            <div style="font-size: 13px; margin-bottom: 15px;">
+                <span style="color: #2ecc71;">Offers:</span> <span id="trade-offer-give" style="color: #fff;"></span><br>
+                <span style="color: #e74c3c;">Wants:</span> <span id="trade-offer-get" style="color: #fff;"></span>
+            </div>
+            <div style="height: 6px; background: #444; width: 100%; border-radius: 3px; margin-bottom: 15px; overflow: hidden;">
+                <div id="trade-timer-bar" style="height: 100%; background: #f1c40f; width: 100%;"></div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 10px;">
+                <button id="acceptTradeBtn" style="width: 100%; padding: 10px; background: #2ecc71;">Accept Trade</button>
+                <button id="declineTradeBtn" style="width: 100%; padding: 10px; background: #e74c3c;">Decline Trade</button>
+            </div>
+        </div>
+
+        <div id="robber-panel" style="display:none; background: rgba(44, 62, 80, 0.95); padding: 20px; border: 2px solid #e74c3c; border-radius: 12px; flex-direction: column; gap: 15px; align-items: center; box-shadow: 0 0 50px rgba(0,0,0,0.8);">
+            <div style="color: #e74c3c; font-weight: bold; font-size: 18px;">ROBBER SELECTION</div>
+            <div style="color: #fff; font-size: 14px;">Choose a player to steal from:</div>
+            <div id="robber-victims" style="display: flex; gap: 10px;"></div>
+        </div>
+
+        <div id="discard-panel" style="display:none; background: rgba(44, 62, 80, 0.95); padding: 20px; border: 2px solid #e74c3c; border-radius: 12px; flex-direction: column; gap: 15px; width: 320px; box-shadow: 0 0 50px rgba(0,0,0,0.8);">
+            <div style="color: #e74c3c; font-weight: bold; font-size: 18px; text-align: center;">DISCARD CARDS</div>
+            <div id="discard-hint" style="color: #fff; font-size: 13px; text-align: center;">You rolled a 7! Discard <span id="discard-count-total">0</span> cards.</div>
+            <div id="discard-controls" style="display: flex; flex-direction: column; gap: 8px;"></div>
+            <div style="color: #aaa; font-size: 11px; text-align: center;">Remaining: <span id="discard-remaining">0</span></div>
+            <button id="confirmDiscardBtn" disabled style="background: #2ecc71; width: 100%; margin-top: 10px;">Confirm Discard</button>
+        </div>
+
+        <div id="victory-panel" style="display:none; background: rgba(0,0,0,0.9); padding: 40px; border: 4px solid gold; border-radius: 20px; flex-direction: column; gap: 25px; align-items: center; box-shadow: 0 0 100px rgba(212, 175, 55, 0.4);">
+            <div id="victory-name" style="color: gold; font-weight: bold; font-size: 36px; text-shadow: 0 0 20px rgba(255, 215, 0, 0.5);">PLAYER WINS!</div>
+            <div style="color: #fff; font-size: 18px;">Congratulations on your victory.</div>
+            <div style="display: flex; gap: 15px; width: 100%;">
+                <button id="replayBtn" style="flex: 1; padding: 15px; background: #2ecc71; font-size: 18px;">Replay</button>
+                <button id="newGameBtn" style="flex: 1; padding: 15px; background: #3498db; font-size: 18px;">New Game</button>
+            </div>
+        </div>
+
         <div id="game-container">
             <canvas id="gameCanvas"></canvas>
             <div id="controls">
                 <div class="main-btns">
                     <button id="rollBtn" disabled>Roll Dice</button>
+                    <button id="bankTradeBtn" disabled style="background: #f1c40f; color: #000;">Bank Trade</button>
+                    <button id="tradeBtn" disabled style="background: #e67e22;">Trade Player</button>
                     <button id="endBtn" disabled>End Turn</button>
                     <button id="resetCamBtn" style="background: #7f8c8d; font-size: 11px;">Reset View</button>
-                </div>
-                <div id="trade-panel" style="display:none; background: rgba(0,0,0,0.8); padding: 12px; border-radius: 8px; flex-direction: column; gap: 10px; width: 340px; border: 1px solid #f1c40f;">
-                  <div style="font-size: 13px; color: #f1c40f; font-weight: bold; text-align: center; letter-spacing: 1px;">BANK TRADE (4:1)</div>
-                  <div style="font-size: 10px; color: #aaa; text-align: center;">1. Select what to GIVE</div>
-                  <div id="trade-give" style="display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; padding-bottom: 5px;"></div>
-                  <div id="trade-get-label" style="font-size: 10px; color: #aaa; text-align: center; display: none;">2. Select what to GET</div>
-                  <div id="trade-get" style="display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; display: none;"></div>
-                </div>
-                <!-- Robber Selection UI -->
-                <div id="robber-panel" style="display:none; background: rgba(44, 62, 80, 0.95); padding: 15px; border: 2px solid #e74c3c; border-radius: 8px; flex-direction: column; gap: 10px; align-items: center; box-shadow: 0 0 15px rgba(0,0,0,0.5);">
-                    <div style="color: #e74c3c; font-weight: bold; font-size: 16px;">ROBBER SELECTION</div>
-                    <div style="color: #fff; font-size: 14px;">Choose a player to steal from:</div>
-                    <div id="robber-victims" style="display: flex; gap: 10px;"></div>
                 </div>
             </div>
             <div class="rules-hint" id="rulesHint">

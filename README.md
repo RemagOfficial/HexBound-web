@@ -14,10 +14,10 @@ HexBound is a browser-based, high-performance strategy game and simulation engin
 
 ## 🎮 Controls
 
-*   **🖱️ Pan**: Click and drag to move the board.
-*   **🔍 Zoom**: Use the **Mouse Wheel** to zoom (centered on your cursor).
-*   **🛠️ Build**: Click **Vertices** to build Settlements/Cities and **Edges** to build Roads. Valid locations pulse with cyan/gold highlights during your turn.
-*   **🎲 Actions**: Use the bottom control bar to **Roll Dice**, **End Turn**, or perform **Bank Trades (4:1)**.
+*   **🖱️ Pan**: Click and drag (Desktop) or **One-Finger Drag** (Mobile) to move the board.
+*   **🔍 Zoom**: Use the **Mouse Wheel** (Desktop) or **Pinch-to-Zoom** (Mobile) to scale the board.
+*   **🛠️ Build**: Click **Vertices** to build Settlements/Cities and **Edges** to build Roads. Valid locations pulse with cyan/gold highlights after your roll.
+*   **🎲 Actions**: Use the control bar to **Roll Dice**, **End Turn**, or perform **Trades**.
 
 ## 🏆 Game Mechanics
 
@@ -25,32 +25,38 @@ HexBound is a browser-based, high-performance strategy game and simulation engin
 *   **Settlement (1 VP)**: Costs 1 Wood, 1 Brick, 1 Sheep, 1 Wheat.
 *   **City (2 VP)**: Costs 3 Ore, 2 Wheat (Upgrades an existing Settlement).
 *   **Roads**: Costs 1 Wood, 1 Brick. Used to expand your reach.
-*   **Longest Road (+2 VP)**: Awarded to the first player with a continuous path of 5+ roads. If another player builds a longer path, they steal the bonus!
+*   **Longest Road (+2 VP)**: Awarded to the player with the longest continuous path (min 5).
 
-### 2. The Robber & Friendly Rule
-*   **Rolling a 7**: Triggers the Robber. 
-    *   Players with > 7 resources must discard half.
-    *   The current player moves the Robber to block a hex and steals 1 resource from an adjacent opponent.
-*   **Friendly Robber**: When enabled, the Robber cannot be placed on hexes affecting players with 2 VP or fewer.
+### 2. Trading
+*   **Bank Trade**: Trade resources at the bank (default 4:1). Rate improves to 3:1 or 2:1 by building on **Ports**.
+*   **Player Trade**: Propose custom trades to AI opponents. You can specify exactly what to **Give** and **Get**. Skilled AI will evaluate trades based on their current needs and surplus.
 
-### 3. AI Strategy Tiers
-*   **Beginner**: Plays slowly and makes semi-random building choices.
-*   **Skilled**: Balanced resource management and expansion.
-*   **Master**: Fast-paced, aggressive expansion, and high-priority targeting of the Longest Road bonus.
+### 3. The Robber & Manual Discarding
+*   **Rolling a 7**: Pauses the game for a special phase:
+    *   **Manual Discard**: Any player (human or AI) with more than 7 cards must select exactly half of their hand to lose.
+    *   **Move Robber**: The current player moves the grey Robber to block a hex from producing resources.
+    *   **Steal**: The current player chooses an opponent on that hex to steal 1 random resource from.
+*   **Friendly Robber**: When enabled, the Robber cannot target players with 2 VP or fewer.
+
+### 4. AI Strategy Tiers
+*   **Beginner**: Slow, random, and might "forget" to build roads.
+*   **Skilled**: Managed expansion and sensible trading.
+*   **Master**: Aggressive expansion, strategic card hoarding, and ruthless road-blocking.
 
 ## ✨ Advanced Features
 
-*   **Stats Panel (Top-Right)**: A compact summary of all players' Victory Points (VP), Road Length (RD), Total Resources (RES), and a live reverse-chronological **History Log**.
-*   **Only Bots Mode**: A simulation mode where all players (including Player 0) are controlled by AI. The game automatically restarts 5 seconds after a winner is declared.
-*   **Recursive Pathfinding**: Implements a Depth-First Search (DFS) algorithm to calculate complex road networks while accounting for opponent "road-breaking" settlements.
-*   **Visual Affordance**: Smooth animations for dice rolls and pulsing build-site indicators (hidden during bot turns for a clean spectator experience).
+*   **Fixed Centered Modals**: A reconstructed UI ensures all trade, discard, and robber menus are centered and accessible on any device.
+*   **Victory Screen**: Once a player reaches the target score, a dedicated victory panel appears with options to **Replay** (same settings) or start a **New Game**.
+*   **Concurrency Control**: A `turnToken` system ensures that delayed AI actions never bleed into human turns, providing a glitch-free turn-based experience.
+*   **Visual Dimming**: The game board automatically dims when a modal is active, keeping focus on vital decisions while keeping the HUD visible.
 
 ## 🛠 Technical Overview
 
 *   **Engine**: Custom logic engine built with zero dependencies.
+*   **Language**: Vanilla JavaScript (ES6+), HTML5 Canvas, CSS Flexbox/Grid.
 *   **Coordinates**: Axial $(q, r)$ math for grid operations.
-*   **Rendering**: Optimized HTML5 Canvas with a camera system supporting infinite panning and 0.3x to 3.0x zoom.
-*   **Performance**: Monolithic architecture ensures high-speed execution even with 6 Master-tier AIs and Large board sizes.
+*   **Rendering**: Camera system supporting infinite panning and 0.3x to 3.0x zoom.
+*   **Scaling**: Responsive scaling logic that adjusts the HUD and interaction thresholds for mobile vs. desktop viewports.
 
 ---
 *Created with focus on clean logic and modular design.*

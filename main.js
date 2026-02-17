@@ -10,7 +10,8 @@ const HEX_TYPES = {
   SHEEP: { name: 'Sheep', color: '#90EE90' },
   WHEAT: { name: 'Wheat', color: '#FFD700' },
   ORE: { name: 'Ore', color: '#708090' },
-  DESERT: { name: 'Desert', color: '#F4A460' }
+  DESERT: { name: 'Desert', color: '#F4A460' },
+  WATER: { name: 'Water', color: '#2980b9' }
 };
 
 const COSTS = {
@@ -24,6 +25,7 @@ class Vertex {
   constructor(id, x, y) {
     this.id = id; this.x = x; this.y = y;
     this.ownerId = null; this.isCity = false; this.hexes = [];
+    this.port = null;
   }
 }
 
@@ -38,14 +40,16 @@ class Board {
     this.hexes = new Map();
     this.vertices = new Map();
     this.edges = new Map();
+    this.ports = new Map();
     this.radius = radius;
     this.hexSize = 50;
     this.generateBoard();
+    this.generatePorts();
   }
 
   generateBoard() {
     const totalHexes = 3 * this.radius * (this.radius + 1) + 1;
-    const terrainTypes = Object.values(HEX_TYPES);
+    const terrainTypes = Object.values(HEX_TYPES).filter(t => t.name !== 'Water');
     
     // Create broad pool evenly then fill up to totalHexes
     let terrainPool = [];
@@ -117,6 +121,39 @@ class Board {
     this.edges.forEach(e => { if (e.v1 === vKey || e.v2 === vKey) res.push(e); });
     return res;
   }
+
+  generatePorts() {
+    this.ports = new Map();
+    const edgeToHexes = new Map();
+    this.hexes.forEach(h => {
+        h.edges.forEach(eId => {
+            if (!edgeToHexes.has(eId)) edgeToHexes.set(eId, []);
+            edgeToHexes.get(eId).push(h);
+        });
+    });
+
+    const coastlineEdges = Array.from(this.edges.values()).filter(e => {
+        const hs = edgeToHexes.get(e.id);
+        return hs && hs.length === 1;
+    });
+    
+    coastlineEdges.sort((a,b) => {
+        const v1a = this.getVertex(a.v1), v2a = this.getVertex(a.v2);
+        const v1b = this.getVertex(b.v1), v2b = this.getVertex(b.v2);
+        return Math.atan2((v1a.y + v2a.y), (v1a.x + v2a.x)) - Math.atan2((v1b.y + v2b.y), (v1b.x + v2b.x));
+    });
+
+    const portTypes = ['ALL', 'WOOD', 'ALL', 'BRICK', 'ALL', 'SHEEP', 'ALL', 'WHEAT', 'ALL', 'ORE'];
+    for (let i = 0; i < coastlineEdges.length; i += 4) {
+        const e = coastlineEdges[i];
+        if (!e) continue;
+        const type = portTypes[(i/4) % portTypes.length];
+        const port = { id: `port_${i}`, type, v1: e.v1, v2: e.v2 };
+        this.ports.set(port.id, port);
+        this.getVertex(e.v1).port = port;
+        this.getVertex(e.v2).port = port;
+    }
+  }
 }
 
 // --- LOGIC: PLAYER ---
@@ -128,6 +165,7 @@ class Player {
     this.waitingForSettlement = false; // Memory for AI to save resources
   }
   canAfford(cost) { return Object.entries(cost).every(([res, amt]) => (this.resources[res] || 0) >= amt); }
+  hasResources(map) { return Object.entries(map).every(([res, amt]) => (this.resources[res] || 0) >= amt); }
   spend(cost) { Object.entries(cost).forEach(([res, amt]) => this.resources[res] -= amt); }
   receive(res, amt = 1) { if (this.resources[res] !== undefined) this.resources[res] += amt; }
   calculateVP(longestRoadHolderId) { 
@@ -142,6 +180,7 @@ class Rules {
   static canPlaceSettlement(board, vKey, player, phase) {
     const v = board.getVertex(vKey);
     if (!v || v.ownerId !== null) return false;
+    
     const adjE = board.getEdgesOfVertex(vKey);
     if (adjE.some(e => {
         const otherV = (e.v1 === vKey) ? e.v2 : e.v1;
@@ -171,6 +210,11 @@ class GameState {
     this.longestRoadLength = 4; 
     this.robberHexId = Array.from(board.hexes.keys()).find(k => board.hexes.get(k).terrain === HEX_TYPES.DESERT);
     this.diceAnim = { value: [1, 1], timer: 0 };
+    this.activeTrade = null;
+    this.tradeTimer = null;
+    this.turnToken = 0;
+    this.waitingForDiscards = []; // Array of ids who must discard
+    this.aiTradeAttempts = 0; // Track AI trade attempts per turn
     this.log(`Initial Phase: Goal is ${targetScore} Points (${aiDifficulty} AI)`);
   }
   get currentPlayer() { return this.players[this.currentPlayerIdx]; }
@@ -180,8 +224,14 @@ class GameState {
   }
   
   nextTurn() {
+    this.turnToken++;
     this.currentPlayerIdx = (this.currentPlayerIdx + 1) % this.players.length;
     this.hasRolled = false;
+    this.aiTradeAttempts = 0; // Reset for the next player
+    
+    // Clear any leftover trades from previous turn
+    if (this.activeTrade) this.clearTrade();
+
     this.players.forEach(p => p.calculateVP(this.longestRoadHolderId));
     this.checkWinner();
     if (this.winner) return;
@@ -194,18 +244,44 @@ class GameState {
     }
     
     if (this.currentPlayer.isBot && !this.winner) {
-      setTimeout(() => this.aiTurn(), 1000);
+      const token = this.turnToken;
+      setTimeout(() => { if (token === this.turnToken) this.aiTurn(); }, 1000);
     }
   }
 
   aiTurn() {
+    if (this.winner || !this.currentPlayer.isBot || this.hasRolled) return;
     this.rollDice();
     
-    // AI delay for realism
-    setTimeout(() => {
-        this.aiPlay();
-        setTimeout(() => this.nextTurn(), 1000);
-    }, 1500);
+    // Check if we need to discard or move robber (rollDice handles it, but we might need to wait)
+    let delay = 1500;
+    if (this.dice[0] + this.dice[1] === 7) delay = 3500; // Longer delay for robber movement/discarding
+
+    const token = this.turnToken;
+    setTimeout(() => { if (token === this.turnToken) this.aiContinueTurn(); }, delay);
+  }
+
+  aiContinueTurn() {
+    // Basic turn safety
+    if (this.winner || !this.currentPlayer.isBot || this.phase !== 'PLAY') return;
+
+    // Wait if we are still resolving a 7-roll (discards or robber movement)
+    if (this.waitingForDiscards.length > 0 || this.movingRobber || this.waitingToPickVictim) {
+        const token = this.turnToken;
+        setTimeout(() => { if (token === this.turnToken) this.aiContinueTurn(); }, 1000);
+        return;
+    }
+
+    this.aiPlay();
+    
+    // Check if we just proposed a trade to a human player
+    const isWaitingOnHumanTrade = this.activeTrade && !this.players[this.activeTrade.targetId].isBot;
+
+    if (!isWaitingOnHumanTrade && !this.waitingToPickVictim && !this.movingRobber) {
+        // End turn after small delay
+        const token = this.turnToken;
+        setTimeout(() => { if (token === this.turnToken) this.nextTurn(); }, 1000);
+    }
   }
 
   getVertexValue(vKey) {
@@ -218,6 +294,11 @@ class GameState {
             value += dots;
         }
     });
+    // Boost value for ports to encourage expansion/trading in PLAY phase
+    // Discourage starting on a port in INITIAL phase unless tiles are amazing
+    if (v.port && this.aiDifficulty !== 'Beginner') {
+        value += (this.phase === 'INITIAL') ? -1.5 : 1.5;
+    }
     return value;
   }
 
@@ -227,35 +308,67 @@ class GameState {
     let madeAction = true;
     let loops = 0;
 
-    // Beginner skips 20% of the time (was 50%) to be more active but still "forgetful"
+    // Beginner skips turn phase early 20% of the time (was 50%) to be more "forgetful"
     if (diff === 'Beginner' && Math.random() > 0.8) return;
 
-    while (madeAction && loops < 15) {
+    while (madeAction && loops < 20) {
         madeAction = false;
         loops++;
 
-        // 1. BANK TRADING
-        // Beginner now trades at 6+ surplus (was 8) if stuck, making it more likely to progress
-        const tradeThreshold = (diff === 'Master') ? 4 : (diff === 'Skilled' ? 8 : 6);
-        const resources = ['WOOD', 'BRICK', 'SHEEP', 'WHEAT', 'ORE'];
-        for (const from of resources) {
-            if (p.resources[from] >= tradeThreshold) {
-                // If we need something for a Settlement or City
-                const needs = [];
-                if (!p.canAfford(COSTS.SETTLEMENT)) {
-                    if (p.resources.WOOD < 1) needs.push('WOOD');
-                    if (p.resources.BRICK < 1) needs.push('BRICK');
-                    if (p.resources.SHEEP < 1) needs.push('SHEEP');
-                    if (p.resources.WHEAT < 1) needs.push('WHEAT');
-                } else if (!p.canAfford(COSTS.CITY) && p.settlements.length > 0) {
-                    if (p.resources.ORE < 3) needs.push('ORE');
-                    if (p.resources.WHEAT < 2) needs.push('WHEAT');
-                }
+        // Don't take actions if we're currently waiting for a trade
+        if (this.activeTrade) return;
 
-                if (needs.length > 0 && from !== needs[0]) {
-                    p.resources[from] -= 4;
+        const resources = ['WOOD', 'BRICK', 'SHEEP', 'WHEAT', 'ORE'];
+
+        // Find what we need most for next build
+        const needs = [];
+        if (!p.canAfford(COSTS.SETTLEMENT)) {
+            if (p.resources.WOOD < 1) needs.push('WOOD');
+            if (p.resources.BRICK < 1) needs.push('BRICK');
+            if (p.resources.SHEEP < 1) needs.push('SHEEP');
+            if (p.resources.WHEAT < 1) needs.push('WHEAT');
+        } else if (!p.canAfford(COSTS.CITY) && p.settlements.length > 0) {
+            if (p.resources.ORE < 3) needs.push('ORE');
+            if (p.resources.WHEAT < 2) needs.push('WHEAT');
+        }
+
+        // 1. PREFER PLAYER TRADING (Up to 3 attempts if we need something)
+        if (needs.length > 0 && this.aiTradeAttempts < 3 && diff !== 'Beginner') {
+            const surplus = resources.find(r => p.resources[r] > 1); // Bot willing to trade away any surplus
+            if (surplus && surplus !== needs[0]) {
+                this.aiTradeAttempts++;
+                const others = this.players.filter(other => other.id !== p.id);
+                // AI picks a target (usually human but maybe others bots if many players)
+                const target = others[Math.floor(Math.random() * others.length)];
+                
+                // 1-for-1 proposal
+                const give = { [surplus]: 1 };
+                const get = { [needs[0]]: 1 };
+                
+                if (this.proposePlayerTrade(target.id, give, get, true)) {
+                    // If target is human, return and wait for result
+                    if (!target.isBot) {
+                        return; // PAUSE AI logic here until trade resolved
+                    }
+                    // If target is bot, loop will continue once trade resolves (via setTimeout in proposePlayerTrade)
+                    // but since loop is sync, we break it for now.
+                    madeAction = true;
+                    continue; 
+                }
+            }
+        }
+
+        // 2. BANK TRADING (Only if player trades exhausted or not possible)
+        if (!madeAction) {
+            for (const from of resources) {
+                const trRate = this.getTradeRate(p, from);
+                // Master trades at literal minimum, others keep a buffer
+                const tradeThreshold = (diff === 'Master') ? trRate : (diff === 'Skilled' ? trRate + 2 : trRate + 3);
+                
+                if (p.resources[from] >= tradeThreshold && needs.length > 0 && from !== needs[0]) {
+                    p.resources[from] -= trRate;
                     p.resources[needs[0]] += 1;
-                    this.log(`${p.name} traded 4 ${from} for 1 ${needs[0]}`);
+                    this.log(`${p.name} traded ${trRate} ${from} for 1 ${needs[0]}`);
                     madeAction = true;
                     break;
                 }
@@ -263,7 +376,7 @@ class GameState {
         }
         if (madeAction) continue;
 
-        // 2. BUILD CITY - Priority for VP and resource boost
+        // 3. BUILD CITY - Priority for VP and resource boost
         if (p.canAfford(COSTS.CITY) && p.settlements.length > 0) {
             // Master picks the settlement on highest value tiles
             let bestS = p.settlements[0];
@@ -356,6 +469,7 @@ class GameState {
   }
 
   rollDice() {
+    if (this.hasRolled) return;
     this.dice = [Math.floor(Math.random()*6)+1, Math.floor(Math.random()*6)+1];
     this.diceAnim = { value: [...this.dice], timer: 120 };
     const tot = this.dice[0] + this.dice[1];
@@ -364,24 +478,27 @@ class GameState {
     if (typeof setupTradeUI === 'function') setupTradeUI();
 
     if (tot === 7) {
-      this.log('Roll 7! Moving Robber...');
-      // Discard half if > 7 cards
+      this.log('Roll 7!');
+      this.waitingForDiscards = [];
       this.players.forEach(p => {
-        let totalRes = Object.values(p.resources).reduce((a,b) => a+b, 0);
+        const totalRes = Object.values(p.resources).reduce((a,b) => a+b, 0);
         if (totalRes > 7) {
-            let discardCount = Math.floor(totalRes / 2);
-            this.log(`${p.name} discards ${discardCount} cards`);
-            for(let i=0; i<discardCount; i++) {
-                let resTypes = Object.keys(p.resources).filter(k => p.resources[k] > 0);
-                let r = resTypes[Math.floor(Math.random()*resTypes.length)];
-                p.resources[r]--;
+            const count = Math.floor(totalRes / 2);
+            this.waitingForDiscards.push(p.id);
+            if (p.isBot) {
+                setTimeout(() => this.aiDiscard(p.id, count), 1000 + Math.random() * 1000);
             }
         }
       });
-      if (!this.currentPlayer.isBot) {
-        this.movingRobber = true;
+      
+      if (this.waitingForDiscards.length > 0) {
+          const humanNeedsDiscard = this.waitingForDiscards.includes(0);
+          if (humanNeedsDiscard) {
+              const totalRes = Object.values(this.players[0].resources).reduce((a,b) => a+b, 0);
+              if (typeof setupDiscardUI === 'function') setupDiscardUI(Math.floor(totalRes / 2));
+          }
       } else {
-        this.aiMoveRobber();
+          this.startRobberPhase();
       }
     } else {
       this.board.hexes.forEach((h, id) => {
@@ -392,6 +509,44 @@ class GameState {
           });
         }
       });
+    }
+  }
+
+  aiDiscard(playerId, count) {
+    const p = this.players[playerId];
+    const diff = this.aiDifficulty;
+    
+    for (let i = 0; i < count; i++) {
+        let resTypes = Object.keys(p.resources).filter(k => p.resources[k] > 0);
+        if (resTypes.length === 0) break;
+
+        let resToDiscard;
+        if (diff === 'Beginner') {
+            resToDiscard = resTypes[Math.floor(Math.random() * resTypes.length)];
+        } else {
+            // Skilled/Master: Discard the resource they have the most of
+            resToDiscard = resTypes.reduce((a, b) => p.resources[a] > p.resources[b] ? a : b);
+        }
+        p.resources[resToDiscard]--;
+    }
+    
+    this.log(`${p.name} discarded ${count} cards.`);
+    this.confirmDiscard(playerId);
+  }
+
+  confirmDiscard(playerId) {
+    this.waitingForDiscards = this.waitingForDiscards.filter(id => id !== playerId);
+    if (this.waitingForDiscards.length === 0) {
+        this.startRobberPhase();
+    }
+  }
+
+  startRobberPhase() {
+    this.log('Moving Robber...');
+    if (!this.currentPlayer.isBot) {
+      this.movingRobber = true;
+    } else {
+      this.aiMoveRobber();
     }
   }
 
@@ -502,15 +657,140 @@ class GameState {
     this.log(`${this.currentPlayer.name} stole 1 ${r} from ${target.name}`);
   }
 
+  getTradeRate(player, res) {
+    let rate = 4;
+    player.settlements.concat(player.cities).forEach(vKey => {
+      const v = this.board.getVertex(vKey);
+      if (v.port) {
+        if (v.port.type === 'ALL' && rate > 3) rate = 3;
+        if (v.port.type === res && rate > 2) rate = 2;
+      }
+    });
+    return rate;
+  }
+
   tradeWithBank(fromRes, toRes) {
     const p = this.currentPlayer;
-    if (!p.isBot && p.resources[fromRes] >= 4) {
-      p.resources[fromRes] -= 4;
+    const rate = this.getTradeRate(p, fromRes);
+    if (!p.isBot && p.resources[fromRes] >= rate) {
+      p.resources[fromRes] -= rate;
       p.resources[toRes] += 1;
-      this.log(`Traded 4 ${fromRes} for 1 ${toRes}`);
+      this.log(`Traded ${rate} ${fromRes} for 1 ${toRes}`);
       return true;
     }
     return false;
+  }
+
+  proposePlayerTrade(targetId, give, get, isAI = false) {
+    const sender = this.currentPlayer;
+    const target = this.players[targetId];
+
+    // sender check (always happens)
+    if (!sender.hasResources(give)) {
+      if (!isAI) this.log(`You don't have enough resources to trade.`);
+      return false;
+    }
+
+    // Knowledge Check: 
+    // If Human is sender, we check target immediately and fail if they don't have the items.
+    if (!isAI && !target.hasResources(get)) {
+        this.log(`${target.name} doesn't have the resources you requested.`);
+        return false;
+    }
+
+    // If AI is sender and target is Human, check immediately to avoid flickering UI.
+    // If the human doesn't have the items, the AI will silently fail this attempt and try something else.
+    if (isAI && !target.isBot && !target.hasResources(get)) {
+        return false;
+    }
+
+    this.activeTrade = { senderId: sender.id, targetId, give, get, timeRemaining: 20 };
+    this.log(`${sender.name} proposed a trade to ${target.name}`);
+
+    // If AI proposed to another Bot, we keep the small delay for "thinking" before rejection
+    if (isAI && target.isBot && !target.hasResources(get)) {
+        setTimeout(() => {
+            this.log(`${target.name} doesn't have those resources.`);
+            this.clearTrade();
+        }, 1000);
+        return true; 
+    }
+
+    if (this.tradeTimer) clearInterval(this.tradeTimer);
+    this.tradeTimer = setInterval(() => {
+        this.activeTrade.timeRemaining--;
+        if (this.activeTrade.timeRemaining <= 0) {
+            this.declinePlayerTrade();
+        }
+    }, 1000);
+
+    // If AI logic if target is bot
+    if (target.isBot) {
+        const token = this.turnToken;
+        setTimeout(() => { if (token === this.turnToken) this.aiEvaluateTrade(); }, 1000);
+    }
+    return true;
+  }
+
+  aiEvaluateTrade() {
+    if (!this.activeTrade) return;
+    const t = this.activeTrade;
+    const target = this.players[t.targetId];
+
+    // AI is simplistic: if it has surplus (count > 2) for what is asked and wants what is offered (count < 1), it accepts.
+    // Or just 50% chance for now to make it playable.
+    let accept = false;
+    // But only if they can afford it
+    if (target.hasResources(t.get)) {
+       const counts = Object.values(t.get).reduce((a,b)=>a+b, 0);
+       const offers = Object.values(t.give).reduce((a,b)=>a+b, 0);
+       // Accept if getting more than giving, or 30% chance.
+       if (offers > counts) accept = true;
+       else if (Math.random() > 0.7) accept = true;
+    }
+
+    if (accept) {
+        this.acceptPlayerTrade();
+    } else {
+        this.declinePlayerTrade();
+    }
+  }
+
+  acceptPlayerTrade() {
+    if (!this.activeTrade) return;
+    const t = this.activeTrade;
+    const p1 = this.players[t.senderId];
+    const p2 = this.players[t.targetId];
+
+    // Double check availability
+    if (p1.hasResources(t.give) && p2.hasResources(t.get)) {
+        Object.entries(t.give).forEach(([r, a]) => { p1.resources[r] -= a; p2.resources[r] += a; });
+        Object.entries(t.get).forEach(([r, a]) => { p2.resources[r] -= a; p1.resources[r] += a; });
+        this.log(`${p2.name} accepted the trade!`);
+    } else {
+        this.log(`Trade failed: Someone no longer has the resources.`);
+    }
+
+    this.clearTrade();
+  }
+
+  declinePlayerTrade() {
+    if (!this.activeTrade) return;
+    this.log(`${this.players[this.activeTrade.targetId].name} declined the trade.`);
+    this.clearTrade();
+  }
+
+  clearTrade() {
+    const wasAITurn = this.currentPlayer.isBot && this.phase === 'PLAY';
+    const token = this.turnToken;
+    if (this.tradeTimer) clearInterval(this.tradeTimer);
+    this.activeTrade = null;
+    this.tradeTimer = null;
+
+    // RESUME AI turn if it was their turn
+    if (wasAITurn && !this.winner) {
+        setTimeout(() => { if (token === this.turnToken) this.aiContinueTurn(); }, 1000);
+    }
   }
 
   build(type, id) {
@@ -553,6 +833,7 @@ class GameState {
   }
 
   finishInitial() {
+    this.turnToken++;
     this.pendingSettlement = null; this.initialPlacements++;
     const numPlayers = this.players.length;
     // Order: 0, 1, 2... then reverse ...2, 1, 0
@@ -562,23 +843,57 @@ class GameState {
 
     if (this.initialPlacements < numPlayers * 2) {
       this.currentPlayerIdx = order[this.initialPlacements];
-      if (this.currentPlayer.isBot) setTimeout(() => this.aiInitial(), 1000);
+      if (this.currentPlayer.isBot) {
+        const token = this.turnToken;
+        setTimeout(() => { if (token === this.turnToken) this.aiInitial(); }, 1000);
+      }
     } else { 
       this.phase = 'PLAY'; this.currentPlayerIdx = 0; this.log('Play Phase Started!'); 
-      if (this.currentPlayer.isBot) setTimeout(() => this.aiTurn(), 1000);
+      if (this.currentPlayer.isBot) {
+        const token = this.turnToken;
+        setTimeout(() => { if (token === this.turnToken) this.aiTurn(); }, 1000);
+      }
     }
   }
 
   aiInitial() {
-    const keys = Array.from(this.board.vertices.keys()).sort(() => Math.random() - 0.5);
-    for (const k of keys) {
-      if (Rules.canPlaceSettlement(this.board, k, this.currentPlayer, 'INITIAL')) {
-        this.build('SETTLEMENT', k);
-        const edges = this.board.getEdgesOfVertex(k);
-        this.build('ROAD', edges[Math.floor(Math.random() * edges.length)].id);
-        break;
-      }
+    const keys = Array.from(this.board.vertices.keys()).filter(k => 
+      Rules.canPlaceSettlement(this.board, k, this.currentPlayer, 'INITIAL')
+    );
+    if (keys.length === 0) {
+      this.log(`${this.currentPlayer.name} found no space to build.`);
+      this.finishInitial();
+      return;
     }
+
+    let bestV;
+    const diff = this.aiDifficulty;
+    if (diff === 'Master') {
+        bestV = keys.reduce((max, curr) => this.getVertexValue(curr) > this.getVertexValue(max) ? curr : max);
+    } else if (diff === 'Skilled' || diff === 'Normal') {
+        // Sort and pick from top 3 for some variety
+        keys.sort((a,b) => this.getVertexValue(b) - this.getVertexValue(a));
+        bestV = keys[Math.floor(Math.random() * Math.min(3, keys.length))];
+    } else {
+        bestV = keys[Math.floor(Math.random() * keys.length)];
+    }
+
+    this.build('SETTLEMENT', bestV);
+    
+    // AI picks road direction towards another potentially valuable spot
+    const adjEdges = this.board.getEdgesOfVertex(bestV);
+    let bestE = adjEdges[0].id;
+    if (diff !== 'Beginner') {
+        let maxVal = -1;
+        adjEdges.forEach(e => {
+            const otherV = (e.v1 === bestV) ? e.v2 : e.v1;
+            const val = this.getVertexValue(otherV);
+            if (val > maxVal) { maxVal = val; bestE = e.id; }
+        });
+    } else {
+        bestE = adjEdges[Math.floor(Math.random() * adjEdges.length)].id;
+    }
+    this.build('ROAD', bestE);
   }
 
   updateLongestRoad() {
@@ -671,6 +986,10 @@ class CanvasRenderer {
     this.ctx.translate(this.canvas.width/2 + this.camera.x, this.canvas.height/2 + this.camera.y);
     this.ctx.scale(this.camera.zoom, this.camera.zoom);
 
+    // Draw Sea Background
+    const seaSize = (this.board.radius + 1.8) * this.board.hexSize * 1.5;
+    this.drawPoly(0, 0, 6, seaSize, HEX_TYPES.WATER.color, false);
+
     this.board.hexes.forEach((h, id) => {
       const p = this.board.hexToPixel(h.q, h.r);
       const px = p.x, py = p.y;
@@ -692,6 +1011,7 @@ class CanvasRenderer {
         this.ctx.textBaseline = 'middle';
         this.ctx.fillText(h.number, px, py);
       }
+      
       if (gs.robberHexId === id) {
         this.ctx.fillStyle = 'rgba(50,50,50,0.8)';
         this.ctx.beginPath(); this.ctx.arc(px, py + 10, 10, 0, Math.PI*2); this.ctx.fill();
@@ -744,6 +1064,24 @@ class CanvasRenderer {
       }
     });
 
+    this.board.ports.forEach(port => {
+      const v1 = this.board.getVertex(port.v1);
+      const v2 = this.board.getVertex(port.v2);
+      const cx = (v1.x + v2.x) / 2, cy = (v1.y + v2.y) / 2;
+      const angle = Math.atan2(cy, cx);
+      const ox = Math.cos(angle) * 15, oy = Math.sin(angle) * 15;
+
+      this.ctx.strokeStyle = 'rgba(255,255,255,0.6)'; this.ctx.lineWidth = 4;
+      this.ctx.beginPath(); this.ctx.moveTo(v1.x, v1.y); this.ctx.lineTo(cx + ox, cy + oy); this.ctx.lineTo(v2.x, v2.y); this.ctx.stroke();
+
+      this.ctx.fillStyle = (port.type === 'ALL') ? '#fff' : (HEX_TYPES[port.type]?.color || '#fff');
+      this.ctx.beginPath(); this.ctx.arc(cx + ox, cy + oy, 8, 0, Math.PI * 2); this.ctx.fill();
+      this.ctx.strokeStyle = '#000'; this.ctx.lineWidth = 1; this.ctx.stroke();
+      
+      this.ctx.fillStyle = '#000'; this.ctx.font = 'bold 8px Arial'; this.ctx.textAlign = 'center'; this.ctx.textBaseline = 'middle';
+      this.ctx.fillText(port.type === 'ALL' ? '3:1' : '2:1', cx + ox, cy + oy);
+    });
+
     this.board.vertices.forEach(v => {
         const px = v.x, py = v.y;
         const isOwned = v.ownerId !== null;
@@ -780,6 +1118,21 @@ class CanvasRenderer {
         }
     });
     this.ctx.restore();
+
+    // Backdrop for Canvas UI (Action Panel & Stats)
+    // If a modal is active or we are waiting for discards, dim the board but not the canvas header/footer UI
+    const isAnyModalVisible = (tradePanel.style.display === 'flex' || 
+                              playerTradePanel.style.display === 'flex' || 
+                              robberPanel.style.display === 'flex' || 
+                              tradeOfferPanel.style.display === 'flex' ||
+                              discardPanel.style.display === 'flex' ||
+                              document.getElementById('victory-panel').style.display === 'flex' ||
+                              (gs && gs.waitingForDiscards.length > 0));
+    
+    if (isAnyModalVisible) {
+        this.ctx.fillStyle = 'rgba(0,0,0,0.35)';
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    }
 
     this.drawUI(gs);
 
@@ -818,116 +1171,117 @@ class CanvasRenderer {
   drawDot(x, y, r) { this.ctx.beginPath(); this.ctx.arc(x, y, r, 0, Math.PI * 2); this.ctx.fill(); }
 
   drawUI(gs) {
+    const isMobile = this.canvas.width < 768;
+
     // --- LEFT PANEL: TURN & ACTION ---
-    const ACTION_WIDTH = 180;
-    this.ctx.fillStyle = 'rgba(50,50,50,0.85)';
-    this.ctx.fillRect(10, 10, ACTION_WIDTH, 220);
-    this.ctx.strokeStyle = '#fff'; this.ctx.lineWidth = 1; this.ctx.strokeRect(10, 10, ACTION_WIDTH, 220);
+    const ACTION_WIDTH = isMobile ? 130 : 180;
+    const ACTION_HEIGHT = isMobile ? 180 : 220;
+    this.ctx.fillStyle = 'rgba(50,50,50,0.75)';
+    this.ctx.fillRect(10, 10, ACTION_WIDTH, ACTION_HEIGHT);
+    this.ctx.strokeStyle = '#fff'; this.ctx.lineWidth = 1; this.ctx.strokeRect(10, 10, ACTION_WIDTH, ACTION_HEIGHT);
 
     this.ctx.fillStyle = '#fff';
-    this.ctx.font = 'bold 16px Arial';
+    this.ctx.font = isMobile ? 'bold 12px Arial' : 'bold 16px Arial';
     this.ctx.textAlign = 'left';
     this.ctx.textBaseline = 'top';
     this.ctx.fillText('HEXBOUND', 20, 20);
 
     if (gs.movingRobber && !gs.currentPlayer.isBot) {
       this.ctx.fillStyle = '#f1c40f';
-      this.ctx.font = 'bold 11px Arial';
-      this.ctx.fillText('MOVE ROBBER', 20, 45);
+      this.ctx.font = isMobile ? 'bold 10px Arial' : 'bold 11px Arial';
+      this.ctx.fillText('MOVE ROBBER', 20, isMobile ? 40 : 45);
     } else {
-      this.ctx.font = '12px Arial';
+      this.ctx.font = isMobile ? '10px Arial' : '12px Arial';
       this.ctx.fillStyle = gs.currentPlayer.color;
-      this.ctx.fillText(gs.currentPlayer.name, 20, 45);
+      this.ctx.fillText(gs.currentPlayer.name, 20, isMobile ? 40 : 45);
     }
 
-    this.drawDice(20, 65, gs.dice[0], 30);
-    this.drawDice(55, 65, gs.dice[1], 30);
+    const diceSize = isMobile ? 25 : 30;
+    this.drawDice(20, isMobile ? 60 : 65, gs.dice[0], diceSize);
+    this.drawDice(20 + diceSize + 5, isMobile ? 60 : 65, gs.dice[1], diceSize);
 
-    let ly = 105;
+    let ly = isMobile ? 95 : 105;
     this.ctx.fillStyle = '#fff';
-    this.ctx.font = 'bold 11px Arial';
+    this.ctx.font = isMobile ? 'bold 10px Arial' : 'bold 11px Arial';
     this.ctx.fillText('YOUR RESOURCES:', 20, ly);
     const human = gs.players[0];
-    this.ctx.font = '11px Arial';
+    this.ctx.font = isMobile ? '9px Arial' : '11px Arial';
     Object.entries(human.resources).forEach(([r, v]) => {
-      ly += 15;
+      ly += isMobile ? 12 : 15;
       this.ctx.fillText(`${r}: ${v}`, 30, ly);
     });
 
     if (gs.friendlyRobber) {
       this.ctx.fillStyle = '#00ffcc';
-      this.ctx.font = 'italic 10px Arial';
-      this.ctx.fillText('🛡️ Friendly Robber', 20, 205);
+      this.ctx.font = isMobile ? 'italic 9px Arial' : 'italic 10px Arial';
+      this.ctx.fillText('🛡️ Friendly', 20, ACTION_HEIGHT - 10);
     }
 
     // --- RIGHT PANEL: GAME STATS ---
-    const STATS_WIDTH = 240;
+    const STATS_WIDTH = isMobile ? 180 : 240;
     const rx = this.canvas.width - STATS_WIDTH - 10;
     const ry = 10;
     
-    // Calculate height based on players and history
-    const historyCount = 10;
-    const STATS_HEIGHT = 110 + (gs.players.length * 20) + (historyCount * 14);
+    // Calculate height based on players and history (history hidden on mobile)
+    const historyCount = isMobile ? 0 : 10;
+    const STATS_HEIGHT = (isMobile ? 50 : 110) + (gs.players.length * (isMobile ? 16 : 20)) + (historyCount * 14);
     
-    this.ctx.fillStyle = 'rgba(40,40,40,0.9)';
+    this.ctx.fillStyle = 'rgba(40,40,40,0.8)';
     this.ctx.fillRect(rx, ry, STATS_WIDTH, STATS_HEIGHT);
     this.ctx.strokeStyle = '#fff'; this.ctx.lineWidth = 1; this.ctx.strokeRect(rx, ry, STATS_WIDTH, STATS_HEIGHT);
 
     this.ctx.fillStyle = '#fff';
-    this.ctx.font = 'bold 14px Arial';
+    this.ctx.font = isMobile ? 'bold 11px Arial' : 'bold 14px Arial';
     this.ctx.fillText('GAME STATS', rx + 15, ry + 15);
 
     // Header for Table
-    this.ctx.font = '10px Arial';
+    this.ctx.font = isMobile ? '8px Arial' : '10px Arial';
     this.ctx.fillStyle = '#aaa';
-    this.ctx.fillText('PLAYER', rx + 15, ry + 40);
-    this.ctx.fillText('VP', rx + 120, ry + 40);
-    this.ctx.fillText('RD', rx + 150, ry + 40);
-    this.ctx.fillText('RES', rx + 180, ry + 40);
+    this.ctx.fillText('PLAYER', rx + 15, ry + (isMobile ? 30 : 40));
+    this.ctx.fillText('VP', rx + (isMobile ? 100 : 120), ry + (isMobile ? 30 : 40));
+    this.ctx.fillText('RD', rx + (isMobile ? 125 : 150), ry + (isMobile ? 30 : 40));
+    this.ctx.fillText('RES', rx + (isMobile ? 150 : 180), ry + (isMobile ? 30 : 40));
 
-    let py = ry + 60;
+    let py = ry + (isMobile ? 45 : 60);
     gs.players.forEach(p => {
       this.ctx.fillStyle = p.color;
-      this.ctx.font = 'bold 12px Arial';
+      this.ctx.font = isMobile ? 'bold 10px Arial' : 'bold 12px Arial';
       let nameText = p.name;
       if (gs.longestRoadHolderId === p.id) nameText += ' 🏆';
-      this.ctx.fillText(nameText.substring(0, 12), rx + 15, py);
+      this.ctx.fillText(nameText.substring(0, isMobile ? 10 : 12), rx + 15, py);
       
       this.ctx.fillStyle = '#fff';
-      this.ctx.font = '12px Arial';
-      this.ctx.fillText(p.victoryPoints, rx + 120, py);
-      this.ctx.fillText(gs.calculateLongestPath(p.id), rx + 150, py);
+      this.ctx.font = isMobile ? '10px Arial' : '12px Arial';
+      this.ctx.fillText(p.victoryPoints, rx + (isMobile ? 100 : 120), py);
+      this.ctx.fillText(gs.calculateLongestPath(p.id), rx + (isMobile ? 125 : 150), py);
       const totalRes = Object.values(p.resources).reduce((a, b) => a + b, 0);
-      this.ctx.fillText(totalRes, rx + 180, py);
-      py += 20;
+      this.ctx.fillText(totalRes, rx + (isMobile ? 150 : 180), py);
+      py += isMobile ? 16 : 20;
     });
 
-    // History Section
-    py += 10;
-    this.ctx.strokeStyle = '#555';
-    this.ctx.beginPath(); this.ctx.moveTo(rx + 10, py); this.ctx.lineTo(rx + STATS_WIDTH - 10, py); this.ctx.stroke();
-    py += 10;
-    this.ctx.fillStyle = '#fff';
-    this.ctx.font = 'bold 12px Arial';
-    this.ctx.fillText('HISTORY', rx + 15, py);
-    py += 18;
-    this.ctx.font = '10px Arial';
-    this.ctx.fillStyle = '#ccc';
-    const recentHistory = gs.history.slice(-historyCount).reverse();
-    recentHistory.forEach(h => {
-      const displayLog = h.length > 40 ? h.substring(0, 37) + '...' : h;
-      this.ctx.fillText(displayLog, rx + 15, py);
-      py += 14;
-    });
+    // History Section (Hidden on mobile)
+    if (!isMobile) {
+        py += 10;
+        this.ctx.strokeStyle = '#555';
+        this.ctx.beginPath(); this.ctx.moveTo(rx + 10, py); this.ctx.lineTo(rx + STATS_WIDTH - 10, py); this.ctx.stroke();
+        py += 10;
+        this.ctx.fillStyle = '#fff';
+        this.ctx.font = 'bold 12px Arial';
+        this.ctx.fillText('HISTORY', rx + 15, py);
+        py += 18;
+        this.ctx.font = '10px Arial';
+        this.ctx.fillStyle = '#ccc';
+        const recentHistory = gs.history.slice(-historyCount).reverse();
+        recentHistory.forEach(h => {
+          const displayLog = h.length > 40 ? h.substring(0, 37) + '...' : h;
+          this.ctx.fillText(displayLog, rx + 15, py);
+          py += 14;
+        });
+    }
 
     if (gs.winner) { 
-        this.ctx.fillStyle='rgba(0,0,0,0.8)'; 
+        this.ctx.fillStyle='rgba(0,0,0,0.85)'; 
         this.ctx.fillRect(0,0,this.canvas.width,this.canvas.height); 
-        this.ctx.fillStyle='gold'; 
-        this.ctx.font='bold 40px Arial'; 
-        this.ctx.textAlign='center'; 
-        this.ctx.textBaseline='middle';
-        this.ctx.fillText(`${gs.winner.name} WINS!`, this.canvas.width/2, this.canvas.height/2); 
     }
   }
 }
@@ -939,42 +1293,100 @@ class InputHandler {
     this.isDragging = false;
     this.dragMoved = false;
     this.lastMouse = { x: 0, y: 0 };
+    this.lastTouchDist = 0;
 
     canvas.addEventListener('mousemove', e => this.move(e));
     canvas.addEventListener('mousedown', e => this.down(e));
     canvas.addEventListener('mouseup', e => this.up(e));
     canvas.addEventListener('wheel', e => this.wheel(e), { passive: false });
     
+    // Touch Events
+    canvas.addEventListener('touchstart', e => this.touchStart(e), { passive: false });
+    canvas.addEventListener('touchmove', e => this.touchMove(e), { passive: false });
+    canvas.addEventListener('touchend', e => this.touchEnd(e), { passive: false });
+
     // Prevent context menu on right click to allow for panning
     canvas.addEventListener('contextmenu', e => e.preventDefault());
   }
 
+  isAnyModalVisible() {
+    return (tradePanel.style.display === 'flex' || 
+            playerTradePanel.style.display === 'flex' || 
+            robberPanel.style.display === 'flex' || 
+            tradeOfferPanel.style.display === 'flex' || 
+            discardPanel.style.display === 'flex' ||
+            (this.gs && this.gs.waitingForDiscards.length > 0));
+  }
+
   getGameXY(e) {
     const r = this.canvas.getBoundingClientRect();
-    const sx = e.clientX - r.left;
-    const sy = e.clientY - r.top;
+    const sx = (e.clientX || (e.touches && e.touches[0].clientX)) - r.left;
+    const sy = (e.clientY || (e.touches && e.touches[0].clientY)) - r.top;
     // Inverse of: screen = (game * zoom) + center + camera
     const gx = (sx - this.canvas.width / 2 - this.ren.camera.x) / this.ren.camera.zoom;
     const gy = (sy - this.canvas.height / 2 - this.ren.camera.y) / this.ren.camera.zoom;
     return { x: gx, y: gy };
   }
 
-  move(e) {
-    if (this.isDragging) {
-      const dx = e.clientX - this.lastMouse.x;
-      const dy = e.clientY - this.lastMouse.y;
-      this.ren.camera.x += dx;
-      this.ren.camera.y += dy;
-      this.lastMouse = { x: e.clientX, y: e.clientY };
-      if (Math.hypot(dx, dy) > 2) this.dragMoved = true;
+  touchStart(e) {
+    if (this.isAnyModalVisible()) return;
+    e.preventDefault();
+    this.isDragging = true;
+    this.dragMoved = false;
+    if (e.touches.length === 1) {
+        this.lastMouse = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    } else if (e.touches.length === 2) {
+        this.lastTouchDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
     }
+  }
 
-    const { x, y } = this.getGameXY(e);
+  touchMove(e) {
+    if (this.isAnyModalVisible()) return;
+    e.preventDefault();
+    if (!this.isDragging) return;
+
+    if (e.touches.length === 1) {
+        const dx = e.touches[0].clientX - this.lastMouse.x;
+        const dy = e.touches[0].clientY - this.lastMouse.y;
+        this.ren.camera.x += dx;
+        this.ren.camera.y += dy;
+        this.lastMouse = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        if (Math.hypot(dx, dy) > 5) this.dragMoved = true;
+    } else if (e.touches.length === 2) {
+        const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+        const delta = dist - this.lastTouchDist;
+        const zoomSpeed = 0.01;
+        const oldZoom = this.ren.camera.zoom;
+        const newZoom = Math.min(Math.max(0.3, oldZoom + delta * zoomSpeed), 3.0);
+        
+        this.ren.camera.zoom = newZoom;
+        this.lastTouchDist = dist;
+        this.dragMoved = true;
+    }
+  }
+
+  touchEnd(e) {
+    if (this.isAnyModalVisible()) return;
+    e.preventDefault();
+    this.isDragging = false;
+    if (!this.dragMoved) {
+        // Find hover manually since mousemove isn't firing constantly on touch
+        const touch = e.changedTouches[0];
+        const { x, y } = this.getGameXY(touch);
+        this.updateHover(x, y);
+        this.click();
+    }
+  }
+
+  updateHover(x, y) {
+    if (this.isAnyModalVisible()) { this.hover = null; return; }
     this.hover = null;
+    const isMobile = this.canvas.width < 768;
+    const baseVertex = isMobile ? 25 : 15;
+    const baseEdge = isMobile ? 20 : 10;
     
-    // Adjust hitboxes based on zoom - some things should stay clickable
-    const vertexThreshold = 15 / Math.max(0.5, this.ren.camera.zoom);
-    const edgeThreshold = 10 / Math.max(0.5, this.ren.camera.zoom);
+    const vertexThreshold = baseVertex / Math.max(0.5, this.ren.camera.zoom);
+    const edgeThreshold = baseEdge / Math.max(0.5, this.ren.camera.zoom);
 
     this.board.vertices.forEach(v => { 
         if (Math.hypot(x - v.x, y - v.y) < vertexThreshold) this.hover = { type: 'vertex', id: v.id }; 
@@ -985,17 +1397,36 @@ class InputHandler {
     });
     if (!this.hover) this.board.hexes.forEach(h => {
         const p = this.board.hexToPixel(h.q, h.r);
-        if (Math.hypot(x - p.x, y - p.y) < 40) this.hover = { type: 'hex', id: `${h.q},${h.r}` };
+        if (Math.hypot(x - p.x, y - p.y) < (isMobile ? 50 : 40)) this.hover = { type: 'hex', id: `${h.q},${h.r}` };
     });
   }
 
+  move(e) {
+    if (this.isAnyModalVisible()) { this.hover = null; return; }
+    if (this.isDragging) {
+      const dx = e.clientX - this.lastMouse.x;
+      const dy = e.clientY - this.lastMouse.y;
+      this.ren.camera.x += dx;
+      this.ren.camera.y += dy;
+      this.lastMouse = { x: e.clientX, y: e.clientY };
+      if (Math.hypot(dx, dy) > 2) this.dragMoved = true;
+    }
+
+    const { x, y } = this.getGameXY(e);
+    this.updateHover(x, y);
+  }
+
   down(e) {
+    if (this.isAnyModalVisible()) return;
+    if (e.button !== 0 && e.button !== 2) return; // Only left/right click
     this.isDragging = true;
     this.dragMoved = false;
     this.lastMouse = { x: e.clientX, y: e.clientY };
   }
 
   up(e) {
+    if (this.isAnyModalVisible()) return;
+    if (!this.isDragging) return;
     this.isDragging = false;
     if (!this.dragMoved) {
         this.click();
@@ -1003,6 +1434,7 @@ class InputHandler {
   }
 
   wheel(e) {
+    if (this.isAnyModalVisible()) return;
     e.preventDefault();
     const zoomSpeed = 0.001;
     const delta = -e.deltaY;
@@ -1021,7 +1453,11 @@ class InputHandler {
   }
 
   click() {
-    if(this.gs.currentPlayer.isBot || !this.hover) return;
+    if(!this.gs || this.gs.currentPlayer.isBot || !this.hover) return;
+    
+    // Block interaction if any modal is active
+    if (this.isAnyModalVisible()) return;
+    
     if(this.gs.movingRobber) {
         if(this.hover.type==='hex') {
             if (this.hover.id === this.gs.robberHexId) {
@@ -1029,6 +1465,7 @@ class InputHandler {
                 return;
             }
             const h = this.board.hexes.get(this.hover.id);
+
             if(this.gs.friendlyRobber) {
                 const affected = h.vertices.some(vk => {
                     const v = this.board.getVertex(vk);
@@ -1042,11 +1479,11 @@ class InputHandler {
             }
             this.gs.moveRobber(this.hover.id);
         }
-    } else if(this.hover.type==='vertex') {
+    } else if(this.hover.type==='vertex' && !this.gs.winner) {
         const v = this.board.getVertex(this.hover.id);
         if(v.ownerId===null) this.gs.build('SETTLEMENT', this.hover.id);
         else if(v.ownerId===0) this.gs.build('CITY', this.hover.id);
-    } else if(this.hover.type==='edge') this.gs.build('ROAD', this.hover.id);
+    } else if(this.hover.type==='edge' && !this.gs.winner) this.gs.build('ROAD', this.hover.id);
   }
 }
 
@@ -1098,12 +1535,104 @@ const tradePanel = document.getElementById('trade-panel');
 const tradeGiveContainer = document.getElementById('trade-give');
 const tradeGetContainer = document.getElementById('trade-get');
 const tradeGetLabel = document.getElementById('trade-get-label');
+const tradeBtn = document.getElementById('tradeBtn');
+const bankTradeBtn = document.getElementById('bankTradeBtn');
+const playerTradePanel = document.getElementById('player-trade-panel');
+const tradeTargetSelect = document.getElementById('tradeTarget');
+const tradeGiveControls = document.getElementById('trade-give-controls');
+const tradeGetControls = document.getElementById('trade-get-controls');
+const sendTradeBtn = document.getElementById('sendTradeBtn');
+const cancelTradeBtn = document.getElementById('cancelTradeBtn');
+const tradeOfferPanel = document.getElementById('trade-offer-panel');
+const discardPanel = document.getElementById('discard-panel');
+const victoryPanel = document.getElementById('victory-panel');
+const discardControls = document.getElementById('discard-controls');
+const confirmDiscardBtn = document.getElementById('confirmDiscardBtn');
+
 let tradeGiveSelection = null;
+let playerTradeOffer = { WOOD: 0, BRICK: 0, SHEEP: 0, WHEAT: 0, ORE: 0 };
+let playerTradeWants = { WOOD: 0, BRICK: 0, SHEEP: 0, WHEAT: 0, ORE: 0 };
+let discardSelection = { WOOD: 0, BRICK: 0, SHEEP: 0, WHEAT: 0, ORE: 0 };
+let isProposingTrade = false;
+let isTradingWithBank = false;
+
+function setupDiscardUI(totalToDiscard) {
+    if (!gs) return;
+    const p = gs.players[0];
+    const resources = ['WOOD', 'BRICK', 'SHEEP', 'WHEAT', 'ORE'];
+    Object.keys(discardSelection).forEach(r => discardSelection[r] = 0);
+    
+    document.getElementById('discard-count-total').innerText = totalToDiscard;
+    
+    const updateDiscardPanel = () => {
+        const currentDiscarded = Object.values(discardSelection).reduce((a,b) => a+b, 0);
+        const remaining = totalToDiscard - currentDiscarded;
+        document.getElementById('discard-remaining').innerText = remaining;
+        confirmDiscardBtn.disabled = remaining !== 0;
+
+        discardControls.innerHTML = '';
+        resources.forEach(res => {
+            if (p.resources[res] === 0) return;
+
+            const div = document.createElement('div');
+            div.style.display = 'flex'; div.style.alignItems = 'center'; div.style.justifyContent = 'space-between';
+            div.style.gap = '10px'; div.style.background = 'rgba(0,0,0,0.3)'; div.style.padding = '5px 10px'; div.style.borderRadius = '4px';
+
+            const name = document.createElement('span');
+            name.innerText = `${res} (${p.resources[res]})`;
+            name.style.fontSize = '12px';
+
+            const ctrls = document.createElement('div');
+            ctrls.style.display = 'flex'; ctrls.style.alignItems = 'center'; ctrls.style.gap = '8px';
+
+            const val = document.createElement('span');
+            val.innerText = discardSelection[res];
+            val.style.fontWeight = 'bold'; val.style.minWidth = '15px'; val.style.textAlign = 'center';
+
+            const minus = document.createElement('button');
+            minus.innerText = '-'; minus.style.padding = '2px 8px'; minus.style.fontSize = '12px'; minus.style.background = '#e74c3c';
+            minus.onclick = () => { if(discardSelection[res] > 0) { discardSelection[res]--; updateDiscardPanel(); } };
+
+            const plus = document.createElement('button');
+            plus.innerText = '+'; plus.style.padding = '2px 8px'; plus.style.fontSize = '12px'; plus.style.background = '#2ecc71';
+            plus.onclick = () => { 
+                if(discardSelection[res] < p.resources[res] && currentDiscarded < totalToDiscard) { 
+                    discardSelection[res]++; 
+                    updateDiscardPanel(); 
+                } 
+            };
+
+            ctrls.appendChild(minus);
+            ctrls.appendChild(val);
+            ctrls.appendChild(plus);
+            div.appendChild(name);
+            div.appendChild(ctrls);
+            discardControls.appendChild(div);
+        });
+    };
+
+    confirmDiscardBtn.onclick = () => {
+        Object.entries(discardSelection).forEach(([res, amt]) => {
+            p.resources[res] -= amt;
+        });
+        gs.log(`You discarded ${totalToDiscard} cards.`);
+        gs.confirmDiscard(0);
+    };
+
+    updateDiscardPanel();
+}
 
 function setupTradeUI() {
     if (!gs || gs.currentPlayer.isBot) return;
+    
+    // Reset any active UI states
+    isTradingWithBank = false;
+    isProposingTrade = false;
+
     const p = gs.currentPlayer;
     const resources = ['WOOD', 'BRICK', 'SHEEP', 'WHEAT', 'ORE'];
+    
+    // Bank Trade UI Reset
     tradeGiveContainer.innerHTML = '';
     tradeGetContainer.innerHTML = '';
     tradeGiveSelection = null;
@@ -1111,29 +1640,157 @@ function setupTradeUI() {
     tradeGetLabel.style.display = 'none';
 
     resources.forEach(fromRes => {
-        const affordable = p.resources[fromRes] >= 4;
+        const rate = gs.getTradeRate(p, fromRes);
+        const affordable = p.resources[fromRes] >= rate;
         const btn = document.createElement('button');
-        btn.innerText = `Give 4 ${fromRes}`;
+        btn.innerText = `Give ${rate} ${fromRes}`;
         btn.style.fontSize = '9px'; btn.style.padding = '4px 6px';
         btn.style.background = affordable ? '#2ecc71' : '#666';
         btn.style.opacity = affordable ? '1.0' : '0.5';
         btn.disabled = !affordable;
         
         btn.onclick = () => {
-          // Highlight selection
           Array.from(tradeGiveContainer.children).forEach((b, i) => {
              const res = resources[i];
-             b.style.background = (p.resources[res] >= 4) ? '#2ecc71' : '#666';
+             const rRate = gs.getTradeRate(p, res);
+             b.style.background = (p.resources[res] >= rRate) ? '#2ecc71' : '#666';
              b.style.border = 'none';
           });
-          btn.style.background = '#27ae60'; // Darker green for selection
+          btn.style.background = '#27ae60';
           btn.style.border = '2px solid gold';
           tradeGiveSelection = fromRes;
           showTradeGetOptions(fromRes);
         };
         tradeGiveContainer.appendChild(btn);
     });
+
+    bankTradeBtn.onclick = () => {
+        const p = gs.currentPlayer;
+        const resources = ['WOOD', 'BRICK', 'SHEEP', 'WHEAT', 'ORE'];
+        const canTrade = resources.some(r => p.resources[r] >= gs.getTradeRate(p, r));
+
+        if (!canTrade) {
+            gs.log("Bank Trade: You don't have enough resources to trade with the bank (need 4 of a kind, or less with ports).");
+            return;
+        }
+        isTradingWithBank = true;
+    };
+
+    // Player Trade Button Handler
+    tradeBtn.onclick = () => {
+        const p = gs.currentPlayer;
+        const totalRes = Object.values(p.resources).reduce((a, b) => a + b, 0);
+        if (totalRes === 0) {
+            gs.log("Trade: You have no resources to offer.");
+            return;
+        }
+        isProposingTrade = true;
+        setupPlayerTradeUI();
+    };
 }
+
+function setupPlayerTradeUI() {
+    if (!gs) return;
+    const p = gs.currentPlayer;
+    const resources = ['WOOD', 'BRICK', 'SHEEP', 'WHEAT', 'ORE'];
+    
+    // Reset selections
+    Object.keys(playerTradeOffer).forEach(r => playerTradeOffer[r] = 0);
+    Object.keys(playerTradeWants).forEach(r => playerTradeWants[r] = 0);
+    
+    // Build Target Selector
+    tradeTargetSelect.innerHTML = '';
+    gs.players.forEach(other => {
+        if (other.id !== p.id) {
+            const opt = document.createElement('option');
+            opt.value = other.id;
+            opt.innerText = other.name;
+            tradeTargetSelect.appendChild(opt);
+        }
+    });
+
+    // Build Controls for Give/Get
+    const buildControls = (container, state, isGive) => {
+        container.innerHTML = '';
+        resources.forEach(res => {
+            const div = document.createElement('div');
+            div.style.display = 'flex'; div.style.alignItems = 'center'; div.style.justifyContent = 'space-between';
+            div.style.gap = '5px'; div.style.width = '100%';
+            
+        const resLabel = document.createElement('span');
+        resLabel.innerText = res;
+        resLabel.style.fontSize = '11px'; resLabel.style.color = '#fff';
+        
+        const count = isGive ? 0 : '?'; // Hide specific count, show if player can propose
+        const val = document.createElement('span');
+        val.innerText = '0';
+        val.style.fontSize = '14px'; val.style.fontWeight = 'bold';
+        val.style.minWidth = '20px'; val.style.textAlign = 'center';
+
+        const btnGroup = document.createElement('div');
+        btnGroup.style.display = 'flex'; btnGroup.style.gap = '4px';
+
+        const plus = document.createElement('button');
+        plus.innerText = '+'; plus.style.padding = '2px 8px'; plus.style.fontSize = '12px';
+        plus.style.background = '#2ecc71';
+        plus.onclick = () => {
+          if (isGive && playerTradeOffer[res] >= p.resources[res]) return;
+          state[res]++;
+          val.innerText = state[res];
+        };
+
+        const minus = document.createElement('button');
+        minus.innerText = '-'; minus.style.padding = '2px 9px'; minus.style.fontSize = '12px';
+        minus.style.background = '#e74c3c';
+        minus.onclick = () => {
+          if (state[res] > 0) state[res]--;
+          val.innerText = state[res];
+        };
+
+        btnGroup.appendChild(minus);
+        btnGroup.appendChild(plus);
+        
+        div.appendChild(resLabel);
+        div.appendChild(val);
+        div.appendChild(btnGroup);
+        container.appendChild(div);
+      });
+    };
+
+    buildControls(tradeGiveControls, playerTradeOffer, true);
+    buildControls(tradeGetControls, playerTradeWants, false);
+
+    playerTradePanel.style.display = 'flex';
+}
+
+sendTradeBtn.onclick = () => {
+    const targetId = parseInt(tradeTargetSelect.value);
+    const give = {}; Object.entries(playerTradeOffer).forEach(([r, a]) => { if (a > 0) give[r] = a; });
+    const get = {}; Object.entries(playerTradeWants).forEach(([r, a]) => { if (a > 0) get[r] = a; });
+    
+    if (Object.keys(give).length === 0 && Object.keys(get).length === 0) {
+        alert("Select resources for the trade!");
+        return;
+    }
+
+    if (gs.proposePlayerTrade(targetId, give, get)) {
+        isProposingTrade = false;
+        playerTradePanel.style.display = 'none';
+    } 
+};
+
+cancelTradeBtn.onclick = () => {
+    isProposingTrade = false;
+    playerTradePanel.style.display = 'none';
+};
+
+document.getElementById('acceptTradeBtn').onclick = () => {
+    if (gs.activeTrade) gs.acceptPlayerTrade();
+};
+
+document.getElementById('declineTradeBtn').onclick = () => {
+    if (gs.activeTrade) gs.declinePlayerTrade();
+};
 
 function showTradeGetOptions(fromRes) {
     const resources = ['WOOD', 'BRICK', 'SHEEP', 'WHEAT', 'ORE'];
@@ -1148,7 +1805,8 @@ function showTradeGetOptions(fromRes) {
         btn.style.background = '#0099ff'; // Blue for GET buttons
         btn.onclick = () => {
             if(!gs.tradeWithBank(fromRes, toRes)) {
-                alert(`Not enough ${fromRes}! Need at least 4.`);
+                const rate = gs.getTradeRate(gs.currentPlayer, fromRes);
+                alert(`Not enough ${fromRes}! Need at least ${rate}.`);
                 setupTradeUI(); // Reset if somehow they don't have enough now
             } else {
                 setupTradeUI(); // Refresh state after trade
@@ -1185,14 +1843,11 @@ function resize() {
 window.addEventListener('resize', resize); resize();
 
 let board, players, gs, ren, inp;
+let lastGameConfig = null;
 
-startGameBtn.onclick = () => {
-  const aiCount = parseInt(document.getElementById('aiCount').value);
-  const boardRadius = parseInt(document.getElementById('boardSize').value);
-  const winPoints = parseInt(document.getElementById('winPoints').value);
-  const friendlyRobber = document.getElementById('friendlyRobber').checked;
-  const aiDifficulty = document.getElementById('aiDifficulty').value;
-  const onlyBots = document.getElementById('onlyBots').checked;
+function resetGame(config) {
+  lastGameConfig = config;
+  const { aiCount, boardRadius, winPoints, friendlyRobber, aiDifficulty, onlyBots } = config;
 
   // Update rule text
   document.getElementById('ruleWinPoints').innerHTML = `<strong>Victory:</strong> Reach ${winPoints} points.`;
@@ -1225,8 +1880,30 @@ startGameBtn.onclick = () => {
   if (players[0].isBot) {
     setTimeout(() => gs.aiInitial(), 1000);
   }
-  
-  requestAnimationFrame(loop);
+}
+
+startGameBtn.onclick = () => {
+  const config = {
+    aiCount: parseInt(document.getElementById('aiCount').value),
+    boardRadius: parseInt(document.getElementById('boardSize').value),
+    winPoints: parseInt(document.getElementById('winPoints').value),
+    friendlyRobber: document.getElementById('friendlyRobber').checked,
+    aiDifficulty: document.getElementById('aiDifficulty').value,
+    onlyBots: document.getElementById('onlyBots').checked
+  };
+  resetGame(config);
+};
+
+document.getElementById('replayBtn').onclick = () => {
+  if (lastGameConfig) {
+      resetGame(lastGameConfig);
+  }
+};
+
+document.getElementById('newGameBtn').onclick = () => {
+  gs = null; // Stop the loop/game logic
+  gameInterface.style.display = 'none';
+  menuOverlay.style.display = 'flex';
 };
 
 rollBtn.onclick = () => { if(gs && !gs.currentPlayer.isBot && !gs.hasRolled && !gs.movingRobber) gs.rollDice(); };
@@ -1234,16 +1911,57 @@ endBtn.onclick = () => { if(gs && !gs.currentPlayer.isBot && gs.hasRolled && !gs
 document.getElementById('resetCamBtn').onclick = () => { if(ren) { ren.camera = { x: 0, y: 0, zoom: 1.0 }; } };
 
 function loop() {
-  if (!gs) return;
+  requestAnimationFrame(loop);
+  if (!gs) {
+      // Keep UI elements hidden if no game is active
+      gameInterface.style.display = 'none';
+      return;
+  }
   ren.render(gs, inp.hover);
   const isHumanTurn = !gs.currentPlayer.isBot;
   const inRobberActions = gs.movingRobber || gs.waitingToPickVictim;
+  const inDiscardActions = gs.waitingForDiscards.length > 0;
+  const isWinning = gs.winner !== null;
+  const inTradeActions = gs.activeTrade !== null || isProposingTrade || isTradingWithBank;
+  const resources = ['WOOD', 'BRICK', 'SHEEP', 'WHEAT', 'ORE'];
 
-  rollBtn.disabled = gs.phase!=='PLAY' || !isHumanTurn || gs.hasRolled || inRobberActions;
-  endBtn.disabled = gs.phase!=='PLAY' || !isHumanTurn || !gs.hasRolled || inRobberActions;
+  const canTradeBank = isHumanTurn && resources.some(r => gs.currentPlayer.resources[r] >= gs.getTradeRate(gs.currentPlayer, r));
+  const canTradePlayer = isHumanTurn && Object.values(gs.currentPlayer.resources).some(v => v > 0);
+
+  rollBtn.disabled = gs.phase!=='PLAY' || !isHumanTurn || gs.hasRolled || inRobberActions || inTradeActions || inDiscardActions || isWinning;
+  endBtn.disabled = gs.phase!=='PLAY' || !isHumanTurn || !gs.hasRolled || inRobberActions || inTradeActions || inDiscardActions || isWinning;
+  bankTradeBtn.disabled = !canTradeBank || gs.phase!=='PLAY' || !isHumanTurn || !gs.hasRolled || inRobberActions || isTradingWithBank || isProposingTrade || inDiscardActions || isWinning;
+  tradeBtn.disabled = !canTradePlayer || gs.phase!=='PLAY' || !isHumanTurn || !gs.hasRolled || inRobberActions || isProposingTrade || isTradingWithBank || inDiscardActions || isWinning;
   
-  tradePanel.style.display = (gs.phase === 'PLAY' && isHumanTurn && !inRobberActions) ? 'flex' : 'none';
-  robberPanel.style.display = (gs.phase === 'PLAY' && isHumanTurn && gs.waitingToPickVictim) ? 'flex' : 'none';
+  tradePanel.style.display = (gs.phase === 'PLAY' && isHumanTurn && !inRobberActions && !inDiscardActions && isTradingWithBank && !isWinning) ? 'flex' : 'none';
+  playerTradePanel.style.display = (gs.phase === 'PLAY' && isHumanTurn && !inRobberActions && !inDiscardActions && isProposingTrade && !isWinning) ? 'flex' : 'none';
+  robberPanel.style.display = (gs.phase === 'PLAY' && isHumanTurn && gs.waitingToPickVictim && !isWinning) ? 'flex' : 'none';
+  discardPanel.style.display = (inDiscardActions && gs.waitingForDiscards.includes(0) && !isWinning) ? 'flex' : 'none';
+  
+  if (isWinning) {
+      victoryPanel.style.display = 'flex';
+      document.getElementById('victory-name').innerText = `${gs.winner.name.toUpperCase()} WINS!`;
+  } else {
+      victoryPanel.style.display = 'none';
+  }
 
-  requestAnimationFrame(loop);
+  // Handle Player Trade Panel visibility
+  if (gs.activeTrade && !isWinning) {
+      const isTargetHuman = !gs.players[gs.activeTrade.targetId].isBot;
+      if (isTargetHuman && !inDiscardActions) {
+          tradeOfferPanel.style.display = 'flex';
+          document.getElementById('trade-offer-player').innerText = `${gs.players[gs.activeTrade.senderId].name} wants to trade!`;
+          const giveStr = Object.entries(gs.activeTrade.give).map(([r, a]) => `${a} ${r}`).join(', ');
+          const getStr = Object.entries(gs.activeTrade.get).map(([r, a]) => `${a} ${r}`).join(', ');
+          document.getElementById('trade-offer-give').innerText = giveStr;
+          document.getElementById('trade-offer-get').innerText = getStr;
+          document.getElementById('trade-timer-bar').style.width = `${(gs.activeTrade.timeRemaining / 20) * 100}%`;
+      } else {
+          tradeOfferPanel.style.display = 'none';
+      }
+  } else {
+      tradeOfferPanel.style.display = 'none';
+  }
 }
+
+requestAnimationFrame(loop);
