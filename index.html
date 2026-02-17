@@ -78,6 +78,26 @@
             line-height: 1.4;
             transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
             z-index: 1600;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .rules-content {
+            overflow-y: auto;
+            max-height: 85vh;
+            padding-right: 5px;
+        }
+
+        /* Custom Scrollbar for rules panel */
+        .rules-content::-webkit-scrollbar {
+            width: 6px;
+        }
+        .rules-content::-webkit-scrollbar-track {
+            background: rgba(0,0,0,0.1);
+        }
+        .rules-content::-webkit-scrollbar-thumb {
+            background: #7f8c8d;
+            border-radius: 3px;
         }
 
         .rules-hint.collapsed {
@@ -394,6 +414,12 @@
             <button id="confirmDiscardBtn" disabled style="background: #2ecc71; width: 100%; margin-top: 10px;">Confirm Discard</button>
         </div>
 
+        <div id="resource-picker-panel" style="display:none; background: rgba(30,30,30,0.95); padding: 20px; border-radius: 12px; border: 2px solid #3498db; width: 300px; box-shadow: 0 50px 100px rgba(0,0,0,0.5); flex-direction:column; align-items:center;">
+          <div id="picker-title" style="font-weight:bold; font-size:16px; margin-bottom:15px; color:#3498db;">PICK RESOURCE</div>
+          <div id="picker-controls" style="display:flex; flex-direction:column; gap:8px; width:100%;"></div>
+          <button id="cancelPickerBtn" style="margin-top:15px; width:100%; background:#e74c3c;">Cancel</button>
+        </div>
+
         <div id="victory-panel" style="display:none; background: rgba(0,0,0,0.9); padding: 40px; border: 4px solid gold; border-radius: 20px; flex-direction: column; gap: 25px; align-items: center; box-shadow: 0 0 100px rgba(212, 175, 55, 0.4);">
             <div id="victory-name" style="color: gold; font-weight: bold; font-size: 36px; text-shadow: 0 0 20px rgba(255, 215, 0, 0.5);">PLAYER WINS!</div>
             <div style="color: #fff; font-size: 18px;">Congratulations on your victory.</div>
@@ -405,32 +431,51 @@
 
         <div id="game-container">
             <canvas id="gameCanvas"></canvas>
+            <div id="dice-display" style="position: absolute; bottom: 130px; left: 50%; transform: translateX(-50%); display: flex; gap: 20px; pointer-events: none; z-index: 1700;">
+                <canvas id="diceCanvas" width="200" height="100"></canvas>
+            </div>
             <div id="controls">
                 <div class="main-btns">
                     <button id="rollBtn" disabled>Roll Dice</button>
                     <button id="bankTradeBtn" disabled style="background: #f1c40f; color: #000;">Bank Trade</button>
                     <button id="tradeBtn" disabled style="background: #e67e22;">Trade Player</button>
+                    <button id="buyDevBtn" disabled style="background: #9b59b6;">Buy Dev Card</button>
                     <button id="endBtn" disabled>End Turn</button>
                     <button id="resetCamBtn" style="background: #7f8c8d; font-size: 11px;">Reset View</button>
                 </div>
+                <div id="dev-card-container" style="display:flex; gap:5px; margin-top:5px; flex-wrap:wrap; justify-content:center;"></div>
             </div>
             <div class="rules-hint" id="rulesHint">
                 <div id="rulesHandle" onclick="document.getElementById('rulesHint').classList.toggle('collapsed')">RULES</div>
-                <div class="rules-header">QUICK RULES</div>
-                <ul>
-                    <li><strong>Initial Phase:</strong> Click a vertex for settlement, then an adjacent edge for a road. Repeats twice.</li>
-                    <li><strong>Turn Flow:</strong> Roll Dice &rarr; Distribute Resources &rarr; Build &rarr; End Turn.</li>
-                    <li><strong>The Robber:</strong> Rolling a 7 lets you move the Robber. It blocks resource production on that tile.</li>
-                    <li><strong>Longest Road:</strong> Be the first to build a continuous path of 5+ roads to get 2 bonus VP. If someone builds a longer path, they take the bonus!</li>
-                    <li><strong>Bank Trade:</strong> Trade 4 of any resource for 1 of your choice (if you have enough).</li>
-                    <li><strong>Building:</strong> Settlement must be 2 edges away from any other structure.</li>
-                    <li><strong>Costs:</strong>
-                        <br>&bull; Road: 1 Wood, 1 Brick
-                        <br>&bull; Settlement: 1 Wood, 1 Brick, 1 Sheep, 1 Wheat
-                        <br>&bull; City: 3 Ore, 2 Wheat (Upgrades Settlement)
-                    </li>
-                    <li id="ruleWinPoints"><strong>Victory:</strong> Reach 10 points.</li>
-                </ul>
+                <div class="rules-content">
+                    <div class="rules-header">GAME RULES</div>
+                    <ul>
+                        <li><strong>Initial Phase:</strong> Place 2 settlements and 2 roads. The second settlement grants starting resources.</li>
+                        <li><strong>Turn Flow:</strong> Roll Dice &rarr; Collect Resources &rarr; Build/Trade &rarr; End Turn.</li>
+                        <li><strong>Bank Scarcity:</strong> The bank has limited stock. If a resource is depleted, no one receives it from a roll until cards are returned!</li>
+                        <li><strong>The Robber (7):</strong> If you roll a 7, everyone with >7 cards must discard half. You then move the robber and steal 1 card from an adjacent player.</li>
+                        <li><strong>Building:</strong> Settlements must be 2 edges away from any other structure. Cities upgrade settlements.</li>
+                        <li><strong>Costs:</strong>
+                            <br>&bull; Road: 1 Wood, 1 Brick
+                            <br>&bull; Settlement: 1 Wood, 1 Brick, 1 Sheep, 1 Wheat
+                            <br>&bull; City: 3 Ore, 2 Wheat
+                            <br>&bull; Dev Card: 1 Ore, 1 Sheep, 1 Wheat
+                        </li>
+                        <li id="ruleWinPoints"><strong>Victory:</strong> Reach the goal (10+ VP).</li>
+                        <li><strong>Trading:</strong> 4:1 with Bank, 3:1 at generic ports & "?" (generic), 2:1 at specialized ports.</li>
+                        <li><strong>Bonuses (+2 VP):</strong> 
+                            <br>&bull; Longest Road: First to 5+ connected roads. 
+                            <br>&bull; Largest Army: First to play 3+ Knight cards.
+                        </li>
+                        <li><strong>Dev Cards:</strong> Bought at random. Can't be played on the turn they are bought. Max 1 per turn.
+                            <br>&bull; Knight: Move robber + steal.
+                            <br>&bull; Year of Plenty / Invention: Get any 2 resources.
+                            <br>&bull; Road Building: Place 2 free roads.
+                            <br>&bull; Monopoly: Claim all copies of one resource from all players.
+                            <br>&bull; VP Cards: Hidden +1 Victory Point.
+                        </li>
+                    </ul>
+                </div>
             </div>
         </div>
     </div>

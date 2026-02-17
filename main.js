@@ -17,7 +17,16 @@ const HEX_TYPES = {
 const COSTS = {
   ROAD: { WOOD: 1, BRICK: 1 },
   SETTLEMENT: { WOOD: 1, BRICK: 1, SHEEP: 1, WHEAT: 1 },
-  CITY: { ORE: 3, WHEAT: 2 }
+  CITY: { ORE: 3, WHEAT: 2 },
+  DEV_CARD: { ORE: 1, SHEEP: 1, WHEAT: 1 }
+};
+
+const DEV_CARD_TYPES = {
+  KNIGHT: { name: 'Knight', desc: 'Move the robber and steal 1 resource.' },
+  ROAD_BUILDING: { name: 'Road Building', desc: 'Place 2 free roads.' },
+  YEAR_OF_PLENTY: { name: 'Year of Plenty', desc: 'Take any 2 resources from the bank.' },
+  MONOPOLY: { name: 'Monopoly', desc: 'Claim all of 1 resource from other players.' },
+  VP: { name: 'Victory Point', desc: 'Adds 1 to your victory points.' }
 };
 
 // --- LOGIC: BOARD ---
@@ -161,16 +170,23 @@ class Player {
   constructor(id, name, color, isBot = false) {
     this.id = id; this.name = name; this.color = color; this.isBot = isBot;
     this.resources = { WOOD: 0, BRICK: 0, SHEEP: 0, WHEAT: 0, ORE: 0 };
-    this.settlements = []; this.cities = []; this.roads = []; this.victoryPoints = 0;
+    this.settlements = []; this.cities = []; this.roads = []; 
+    this.victoryPoints = 0; this.visibleVP = 0;
     this.waitingForSettlement = false; // Memory for AI to save resources
+    this.devCards = []; // Owned but unplayed cards (except VP)
+    this.playedKnights = 0;
+    this.newDevCardThisTurnIdx = -1; // Prevent playing a card on the same turn it was bought
   }
   canAfford(cost) { return Object.entries(cost).every(([res, amt]) => (this.resources[res] || 0) >= amt); }
   hasResources(map) { return Object.entries(map).every(([res, amt]) => (this.resources[res] || 0) >= amt); }
   spend(cost) { Object.entries(cost).forEach(([res, amt]) => this.resources[res] -= amt); }
   receive(res, amt = 1) { if (this.resources[res] !== undefined) this.resources[res] += amt; }
-  calculateVP(longestRoadHolderId) { 
-    this.victoryPoints = this.settlements.length + (this.cities.length * 2); 
-    if (longestRoadHolderId === this.id) this.victoryPoints += 2;
+  calculateVP(longestRoadHolderId, largestArmyHolderId) { 
+    const vpCardsCount = this.devCards.filter(c => c.type === 'VP').length;
+    this.visibleVP = this.settlements.length + (this.cities.length * 2); 
+    if (longestRoadHolderId === this.id) this.visibleVP += 2;
+    if (largestArmyHolderId === this.id) this.visibleVP += 2;
+    this.victoryPoints = this.visibleVP + vpCardsCount;
     return this.victoryPoints; 
   }
 }
@@ -215,8 +231,187 @@ class GameState {
     this.turnToken = 0;
     this.waitingForDiscards = []; // Array of ids who must discard
     this.aiTradeAttempts = 0; // Track AI trade attempts per turn
+    this.playedDevCardThisTurn = false;
+    this.pendingRoads = 0;
+    
+    // Bank Resources initialization
+    const resCount = (this.players.length > 4) ? 24 : 19;
+    this.bankResources = { WOOD: resCount, BRICK: resCount, SHEEP: resCount, WHEAT: resCount, ORE: resCount };
+
+    // Development Cards Deck
+    this.devCardDeck = [];
+    const isLargeGame = this.players.length > 4;
+    const knightCount = isLargeGame ? 20 : 14;
+    const progressCount = isLargeGame ? 3 : 2;
+    const vpCount = 5;
+
+    for (let i = 0; i < knightCount; i++) this.devCardDeck.push({ type: 'KNIGHT', ...DEV_CARD_TYPES.KNIGHT });
+    for (let i = 0; i < progressCount; i++) {
+        this.devCardDeck.push({ type: 'ROAD_BUILDING', ...DEV_CARD_TYPES.ROAD_BUILDING });
+        
+        const yopCard = { type: 'YEAR_OF_PLENTY', ...DEV_CARD_TYPES.YEAR_OF_PLENTY };
+        if (i >= 2) yopCard.name = 'Invention'; // Expansion version of Year of Plenty
+        this.devCardDeck.push(yopCard);
+        
+        this.devCardDeck.push({ type: 'MONOPOLY', ...DEV_CARD_TYPES.MONOPOLY });
+    }
+    for (let i = 0; i < vpCount; i++) this.devCardDeck.push({ type: 'VP', ...DEV_CARD_TYPES.VP });
+    this.devCardDeck.sort(() => Math.random() - 0.5);
+
+    this.largestArmyHolderId = null;
+    this.largestArmySize = 2; // Need 3 to take it
+    
     this.log(`Initial Phase: Goal is ${targetScore} Points (${aiDifficulty} AI)`);
   }
+
+  buyDevCard(p) {
+    if (!p.canAfford(COSTS.DEV_CARD) || this.devCardDeck.length === 0) return false;
+    this.returnResources(p, COSTS.DEV_CARD);
+    const card = this.devCardDeck.pop();
+    card.boughtTurn = this.turnToken;
+    p.devCards.push(card);
+    this.log(`${p.name} bought a Development Card`);
+    return true;
+  }
+
+  playDevCard(p, idx) {
+    if (this.playedDevCardThisTurn) return false;
+    const card = p.devCards[idx];
+    if (card.type === 'VP') return false; 
+    if (card.boughtTurn >= this.turnToken) return false;
+
+    this.playedDevCardThisTurn = true;
+    p.devCards.splice(idx, 1);
+    this.log(`${p.name} played a ${card.name} card`);
+
+    switch (card.type) {
+      case 'KNIGHT':
+        p.playedKnights++;
+        this.movingRobber = true;
+        this.waitingToPickVictim = true;
+        this.updateLargestArmy();
+        break;
+      case 'ROAD_BUILDING':
+        this.pendingRoads = 2;
+        this.log(`${p.name} can place 2 free roads!`);
+        break;
+      case 'YEAR_OF_PLENTY':
+        if (p.isBot) {
+           const resources = ['WOOD', 'BRICK', 'SHEEP', 'WHEAT', 'ORE'].filter(r => this.bankResources[r] > 0);
+           for (let i = 0; i < 2; i++) {
+             if (resources.length > 0) {
+               const r = resources[Math.floor(Math.random() * resources.length)];
+               this.giveResources(p, r, 1);
+             }
+           }
+        } else {
+           this.showYearOfPlentyMenu();
+        }
+        break;
+      case 'MONOPOLY':
+        if (p.isBot) {
+           const res = ['WOOD', 'BRICK', 'SHEEP', 'WHEAT', 'ORE'][Math.floor(Math.random() * 5)];
+           this.monopolyResource(p, res);
+        } else {
+           this.showMonopolyMenu();
+        }
+        break;
+    }
+    return true;
+  }
+
+  updateLargestArmy() {
+    this.players.forEach(p => {
+      if (p.playedKnights > this.largestArmySize) {
+        this.largestArmySize = p.playedKnights;
+        if (this.largestArmyHolderId !== p.id) {
+            this.largestArmyHolderId = p.id;
+            this.log(`${p.name} is now the Largest Army Holder!`);
+        }
+      }
+    });
+  }
+
+  monopolyResource(p, res) {
+    let totalTaken = 0;
+    this.players.forEach(other => {
+      if (other.id !== p.id) {
+        const amt = other.resources[res] || 0;
+        if (amt > 0) {
+          other.resources[res] -= amt;
+          p.resources[res] += amt;
+          totalTaken += amt;
+        }
+      }
+    });
+    this.log(`${p.name} took all ${totalTaken} ${res} via Monopoly!`);
+  }
+
+  showYearOfPlentyMenu() {
+    this.openResourcePicker("Pick 1st Resource", (res1) => {
+        this.giveResources(this.players[0], res1, 1);
+        setTimeout(() => {
+            this.openResourcePicker("Pick 2nd Resource", (res2) => {
+                this.giveResources(this.players[0], res2, 1);
+                setupTradeUI();
+                setupDevCardUI();
+            });
+        }, 300);
+    });
+  }
+
+  showMonopolyMenu() {
+    this.openResourcePicker("Pick Resource to Steal", (res) => {
+        this.monopolyResource(this.players[0], res);
+        setupTradeUI();
+        setupDevCardUI();
+    });
+  }
+
+  openResourcePicker(title, onPick) {
+    document.getElementById('picker-title').innerText = title;
+    const controls = document.getElementById('picker-controls');
+    controls.innerHTML = '';
+    const resources = ['WOOD', 'BRICK', 'SHEEP', 'WHEAT', 'ORE'];
+    
+    resources.forEach(res => {
+        const btn = document.createElement('button');
+        btn.innerText = res;
+        btn.style.background = '#3498db';
+        btn.onclick = (e) => {
+            e.stopPropagation();
+            resourcePickerPanel.style.display = 'none';
+            onPick(res);
+        };
+        controls.appendChild(btn);
+    });
+
+    cancelPickerBtn.onclick = () => {
+        resourcePickerPanel.style.display = 'none';
+    };
+
+    resourcePickerPanel.style.display = 'flex';
+  }
+
+  giveResources(player, res, amt = 1) {
+    if (this.bankResources[res] === undefined) return;
+    const actual = Math.min(amt, this.bankResources[res]);
+    if (actual > 0) {
+      player.receive(res, actual);
+      this.bankResources[res] -= actual;
+    }
+    if (actual < amt) {
+      this.log(`⚠️ Bank out of ${res}! ${player.name} missed ${amt - actual}`);
+    }
+  }
+
+  returnResources(player, cost) {
+    Object.entries(cost).forEach(([res, amt]) => {
+      player.resources[res] -= amt;
+      this.bankResources[res] += amt;
+    });
+  }
+
   get currentPlayer() { return this.players[this.currentPlayerIdx]; }
   log(msg) { 
     this.history.push(msg); 
@@ -228,11 +423,12 @@ class GameState {
     this.currentPlayerIdx = (this.currentPlayerIdx + 1) % this.players.length;
     this.hasRolled = false;
     this.aiTradeAttempts = 0; // Reset for the next player
+    this.playedDevCardThisTurn = false;
     
     // Clear any leftover trades from previous turn
     if (this.activeTrade) this.clearTrade();
 
-    this.players.forEach(p => p.calculateVP(this.longestRoadHolderId));
+    this.players.forEach(p => p.calculateVP(this.longestRoadHolderId, this.largestArmyHolderId));
     this.checkWinner();
     if (this.winner) return;
 
@@ -284,6 +480,64 @@ class GameState {
     }
   }
 
+  aiPlayDevCards() {
+    const p = this.currentPlayer;
+    if (this.playedDevCardThisTurn || p.devCards.length === 0) return;
+
+    // AI strategy for playing cards
+    const knight = p.devCards.find(c => c.type === 'KNIGHT' && c.boughtTurn < this.turnToken);
+    if (knight) {
+        // Play knight if someone is blocking a good tile
+        const ourHexes = Array.from(this.board.hexes.keys()).filter(id => {
+            const h = this.board.hexes.get(id);
+            return h.vertices.some(vk => this.board.getVertex(vk).ownerId === p.id);
+        });
+        if (ourHexes.includes(this.robberHexId)) {
+            this.playDevCard(p, p.devCards.indexOf(knight));
+            return;
+        }
+        // Or if we are close to largest army and someone else has it
+        if (this.largestArmyHolderId !== p.id && p.playedKnights >= this.largestArmySize - 1) {
+            this.playDevCard(p, p.devCards.indexOf(knight));
+            return;
+        }
+    }
+
+    const roadBuilding = p.devCards.find(c => c.type === 'ROAD_BUILDING' && c.boughtTurn < this.turnToken);
+    if (roadBuilding) {
+        // Play if we have a spot to build a settlement but need 2 roads to reach it
+        const allEdges = Array.from(this.board.edges.keys()).filter(e => Rules.canPlaceRoad(this.board, e, p));
+        if (allEdges.length > 0) {
+            this.playDevCard(p, p.devCards.indexOf(roadBuilding));
+            return;
+        }
+    }
+
+    const yearOfPlenty = p.devCards.find(c => c.type === 'YEAR_OF_PLENTY' && c.boughtTurn < this.turnToken);
+    if (yearOfPlenty) {
+        // Play if we are missing exactly 1 or 2 resources for a settlement or city
+        const neededForSettle = (p.resources.WOOD < 1 ? 1 : 0) + (p.resources.BRICK < 1 ? 1 : 0) + (p.resources.SHEEP < 1 ? 1 : 0) + (p.resources.WHEAT < 1 ? 1 : 0);
+        if (neededForSettle <= 2 && neededForSettle > 0) {
+            this.playDevCard(p, p.devCards.indexOf(yearOfPlenty));
+            return;
+        }
+    }
+
+    const monopoly = p.devCards.find(c => c.type === 'MONOPOLY' && c.boughtTurn < this.turnToken);
+    if (monopoly) {
+        // Play if we know other players have a lot of one resource (aggregated count check)
+        const resources = ['WOOD', 'BRICK', 'SHEEP', 'WHEAT', 'ORE'];
+        resources.forEach(r => {
+            let total = 0;
+            this.players.forEach(other => { if(other.id !== p.id) total += other.resources[r]; });
+            if (total >= 4) {
+                 this.playDevCard(p, p.devCards.indexOf(monopoly));
+                 return;
+            }
+        });
+    }
+  }
+
   getVertexValue(vKey) {
     const v = this.board.getVertex(vKey);
     let value = 0;
@@ -308,8 +562,13 @@ class GameState {
     let madeAction = true;
     let loops = 0;
 
-    // Beginner skips turn phase early 20% of the time (was 50%) to be more "forgetful"
-    if (diff === 'Beginner' && Math.random() > 0.8) return;
+    // AI strategy for playing development cards is called at start of play phase
+    this.aiPlayDevCards();
+
+    // Beginner skips turn phase early 20% of the time to be more "forgetful"
+    // However, they won't skip if they are holding too many resources (fear of robber)
+    const initialTotal = Object.values(p.resources).reduce((a, b) => a + b, 0);
+    if (diff === 'Beginner' && initialTotal <= 7 && Math.random() > 0.8) return;
 
     while (madeAction && loops < 20) {
         madeAction = false;
@@ -319,6 +578,8 @@ class GameState {
         if (this.activeTrade) return;
 
         const resources = ['WOOD', 'BRICK', 'SHEEP', 'WHEAT', 'ORE'];
+        const totalRes = Object.values(p.resources).reduce((a, b) => a + b, 0);
+        const overLimit = totalRes > 7;
 
         // Find what we need most for next build
         const needs = [];
@@ -327,33 +588,55 @@ class GameState {
             if (p.resources.BRICK < 1) needs.push('BRICK');
             if (p.resources.SHEEP < 1) needs.push('SHEEP');
             if (p.resources.WHEAT < 1) needs.push('WHEAT');
-        } else if (!p.canAfford(COSTS.CITY) && p.settlements.length > 0) {
+        } else if (p.settlements.length > 0 && !p.canAfford(COSTS.CITY)) {
             if (p.resources.ORE < 3) needs.push('ORE');
             if (p.resources.WHEAT < 2) needs.push('WHEAT');
         }
 
+        // If over 7 resources, Skilled/Master bots will also focus on anything they are missing to burn resources
+        if (overLimit && diff !== 'Beginner') {
+            // Also need Road components if we have high surplus to burn
+            if (p.resources.WOOD < 1) needs.push('WOOD');
+            if (p.resources.BRICK < 1) needs.push('BRICK');
+            
+            resources.forEach(r => {
+                if (p.resources[r] === 0 && !needs.includes(r)) needs.push(r);
+            });
+            // If still no needs or just over limit, pick anything that isn't the surplus we might trade
+            if (needs.length === 0 || totalRes > 9) {
+                // Finally, just pick the resources we have the absolute least of
+                const sorted = [...resources].sort((a,b) => p.resources[a] - p.resources[b]);
+                sorted.forEach(r => { if (!needs.includes(r)) needs.push(r); });
+            }
+        }
+
         // 1. PREFER PLAYER TRADING (Up to 3 attempts if we need something)
         if (needs.length > 0 && this.aiTradeAttempts < 3 && diff !== 'Beginner') {
-            const surplus = resources.find(r => p.resources[r] > 1); // Bot willing to trade away any surplus
-            if (surplus && surplus !== needs[0]) {
-                this.aiTradeAttempts++;
-                const others = this.players.filter(other => other.id !== p.id);
-                // AI picks a target (usually human but maybe others bots if many players)
-                const target = others[Math.floor(Math.random() * others.length)];
-                
-                // 1-for-1 proposal
-                const give = { [surplus]: 1 };
-                const get = { [needs[0]]: 1 };
-                
-                if (this.proposePlayerTrade(target.id, give, get, true)) {
-                    // If target is human, return and wait for result
-                    if (!target.isBot) {
-                        return; // PAUSE AI logic here until trade resolved
+            // Find a need that other players might actually have (simplified)
+            const targetNeed = needs.find(n => !p.resources[n] || p.resources[n] < 2);
+            if (targetNeed) {
+                // If over limit, bot is willing to trade away anything that isn't their primary "need"
+                const surplus = resources.find(r => p.resources[r] > (overLimit ? 0 : 1) && !needs.includes(r)); 
+                if (surplus) {
+                    this.aiTradeAttempts++;
+                    const others = this.players.filter(other => other.id !== p.id);
+                    // AI picks a target (usually human but maybe others bots if many players)
+                    const target = others[Math.floor(Math.random() * others.length)];
+                    
+                    // 1-for-1 proposal
+                    const give = { [surplus]: 1 };
+                    const get = { [targetNeed]: 1 };
+                    
+                    if (this.proposePlayerTrade(target.id, give, get, true)) {
+                        // If target is human, return and wait for result
+                        if (!target.isBot) {
+                            return; // PAUSE AI logic here until trade resolved
+                        }
+                        // If target is bot, loop will continue once trade resolves (via setTimeout in proposePlayerTrade)
+                        // but since loop is sync, we break it for now.
+                        madeAction = true;
+                        continue; 
                     }
-                    // If target is bot, loop will continue once trade resolves (via setTimeout in proposePlayerTrade)
-                    // but since loop is sync, we break it for now.
-                    madeAction = true;
-                    continue; 
                 }
             }
         }
@@ -362,15 +645,23 @@ class GameState {
         if (!madeAction) {
             for (const from of resources) {
                 const trRate = this.getTradeRate(p, from);
-                // Master trades at literal minimum, others keep a buffer
-                const tradeThreshold = (diff === 'Master') ? trRate : (diff === 'Skilled' ? trRate + 2 : trRate + 3);
+                // Standard trade buffer: Master 0, Skilled 2, Beginner 3
+                let tradeThreshold = (diff === 'Master') ? trRate : (diff === 'Skilled' ? trRate + 2 : trRate + 3);
                 
-                if (p.resources[from] >= tradeThreshold && needs.length > 0 && from !== needs[0]) {
-                    p.resources[from] -= trRate;
-                    p.resources[needs[0]] += 1;
-                    this.log(`${p.name} traded ${trRate} ${from} for 1 ${needs[0]}`);
-                    madeAction = true;
-                    break;
+                // If we have a specific need we are trading for, Skilled bots are slightly more willing to use their buffer
+                if (needs.length > 0 && diff !== 'Beginner') {
+                   tradeThreshold = Math.max(trRate, tradeThreshold - 1);
+                }
+
+                if (p.resources[from] >= tradeThreshold && needs.length > 0) {
+                    const validNeed = needs.find(n => n !== from && this.bankResources[n] > 0);
+                    if (validNeed) {
+                        this.returnResources(p, { [from]: trRate });
+                        this.giveResources(p, validNeed, 1);
+                        this.log(`${p.name} traded ${trRate} ${from} for 1 ${validNeed}`);
+                        madeAction = true;
+                        break;
+                    }
                 }
             }
         }
@@ -431,11 +722,11 @@ class GameState {
                 }
 
                 // SAVING LOGIC: If we have a spot to build a settlement, don't build a road 
-                // UNLESS we have "spare" resources or we are prioritizing Longest Road.
+                // UNLESS we have "spare" resources or we are prioritizing Longest Road or we are holding too many resources
                 const missingSetRes = p.resources.WOOD < 1 || p.resources.BRICK < 1 || p.resources.SHEEP < 1 || p.resources.WHEAT < 1;
                 const canSaveForSettlement = hasSettlementSpot && missingSetRes && !prioritizeRoad;
 
-                if (canSaveForSettlement) {
+                if (canSaveForSettlement && !overLimit) {
                     if (diff === 'Beginner') {
                         // Beginner waits one turn before building a road if a settlement spot is available
                         if (!p.waitingForSettlement) {
@@ -465,13 +756,51 @@ class GameState {
                 continue;
             }
         }
+
+        // 5. BUY DEV CARD
+        if (p.canAfford(COSTS.DEV_CARD) && this.devCardDeck.length > 0) {
+            // Master AI will buy cards more aggressively if they have excess resources
+            let shouldBuy = (diff === 'Master') ? true : (diff === 'Skilled' ? Math.random() > 0.4 : Math.random() > 0.7);
+            
+            // If we are over limit, the bot is more likely to buy a card to burn resources
+            if (overLimit) shouldBuy = true;
+
+            // Don't buy if saving for a city/settlement unless over limit
+            if (shouldBuy && (!needs.includes('ORE') && !needs.includes('SHEEP') && !needs.includes('WHEAT') || overLimit)) {
+                if (this.buyDevCard(p)) {
+                    madeAction = true;
+                    continue;
+                }
+            }
+        }
+
+        // 6. PANIC/FEAR TRADE (Only if over limit and nothing else worked)
+        if (!madeAction && overLimit) {
+            let panicChance = (diff === 'Master') ? 1.0 : (diff === 'Skilled' ? 0.5 : 0.1);
+            if (Math.random() < panicChance) {
+                for (const from of resources) {
+                    const trRate = this.getTradeRate(p, from);
+                    if (p.resources[from] >= trRate) {
+                        const targetNeed = needs.find(n => n !== from && this.bankResources[n] > 0) || 
+                                           resources.find(r => r !== from && this.bankResources[r] > 0);
+                        if (targetNeed) {
+                            this.returnResources(p, { [from]: trRate });
+                            this.giveResources(p, targetNeed, 1);
+                            this.log(`${p.name} panic-traded ${trRate} ${from} for 1 ${targetNeed} (Fear: Robber)`);
+                            madeAction = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
     }
   }
 
   rollDice() {
     if (this.hasRolled) return;
     this.dice = [Math.floor(Math.random()*6)+1, Math.floor(Math.random()*6)+1];
-    this.diceAnim = { value: [...this.dice], timer: 120 };
+    this.diceAnim = { value: [...this.dice], timer: 102 };
     const tot = this.dice[0] + this.dice[1];
     this.log(`${this.currentPlayer.name} rolled ${tot}`);
     this.hasRolled = true;
@@ -492,7 +821,7 @@ class GameState {
       });
       
       if (this.waitingForDiscards.length > 0) {
-          const humanNeedsDiscard = this.waitingForDiscards.includes(0);
+          const humanNeedsDiscard = this.waitingForDiscards.includes(0) && !isOnlyBotsMode;
           if (humanNeedsDiscard) {
               const totalRes = Object.values(this.players[0].resources).reduce((a,b) => a+b, 0);
               if (typeof setupDiscardUI === 'function') setupDiscardUI(Math.floor(totalRes / 2));
@@ -505,7 +834,9 @@ class GameState {
         if (h.number === tot && id !== this.robberHexId) {
           h.vertices.forEach(vk => {
             const v = this.board.getVertex(vk);
-            if (v.ownerId !== null) this.players[v.ownerId].receive(h.terrain.name.toUpperCase(), v.isCity ? 2 : 1);
+            if (v.ownerId !== null) {
+              this.giveResources(this.players[v.ownerId], h.terrain.name.toUpperCase(), v.isCity ? 2 : 1);
+            }
           });
         }
       });
@@ -527,7 +858,7 @@ class GameState {
             // Skilled/Master: Discard the resource they have the most of
             resToDiscard = resTypes.reduce((a, b) => p.resources[a] > p.resources[b] ? a : b);
         }
-        p.resources[resToDiscard]--;
+        this.returnResources(p, { [resToDiscard]: 1 });
     }
     
     this.log(`${p.name} discarded ${count} cards.`);
@@ -673,10 +1004,15 @@ class GameState {
     const p = this.currentPlayer;
     const rate = this.getTradeRate(p, fromRes);
     if (!p.isBot && p.resources[fromRes] >= rate) {
-      p.resources[fromRes] -= rate;
-      p.resources[toRes] += 1;
-      this.log(`Traded ${rate} ${fromRes} for 1 ${toRes}`);
-      return true;
+      if (this.bankResources[toRes] > 0) {
+        this.returnResources(p, { [fromRes]: rate });
+        this.giveResources(p, toRes, 1);
+        this.log(`Traded ${rate} ${fromRes} for 1 ${toRes}`);
+        return true;
+      } else {
+        this.log(`Bank is out of ${toRes}!`);
+        return false;
+      }
     }
     return false;
   }
@@ -804,7 +1140,9 @@ class GameState {
           
           if (this.initialPlacements >= this.players.length) {
             v.hexes.forEach(h => {
-              if (h.terrain !== HEX_TYPES.DESERT) p.receive(h.terrain.name.toUpperCase(), 1);
+              if (h.terrain !== HEX_TYPES.DESERT) {
+                this.giveResources(p, h.terrain.name.toUpperCase(), 1);
+              }
             });
           }
         }
@@ -818,16 +1156,16 @@ class GameState {
       }
     } else if (this.hasRolled) {
       if (type === 'SETTLEMENT' && p.canAfford(COSTS.SETTLEMENT) && Rules.canPlaceSettlement(this.board, id, p, 'PLAY')) {
-        this.board.getVertex(id).ownerId = p.id; p.settlements.push(id); p.spend(COSTS.SETTLEMENT); this.log('Built Settlement');
+        this.board.getVertex(id).ownerId = p.id; p.settlements.push(id); this.returnResources(p, COSTS.SETTLEMENT); this.log('Built Settlement');
       } else if (type === 'ROAD' && p.canAfford(COSTS.ROAD) && Rules.canPlaceRoad(this.board, id, p)) {
-        this.board.getEdge(id).ownerId = p.id; p.roads.push(id); p.spend(COSTS.ROAD); this.log('Built Road');
+        this.board.getEdge(id).ownerId = p.id; p.roads.push(id); this.returnResources(p, COSTS.ROAD); this.log('Built Road');
         this.updateLongestRoad();
       } else if (type === 'CITY' && p.canAfford(COSTS.CITY)) {
         const v = this.board.getVertex(id);
-        if (v.ownerId === p.id && !v.isCity) { v.isCity = true; p.cities.push(id); p.settlements = p.settlements.filter(s => s !== id); p.spend(COSTS.CITY); this.log('Built City'); }
+        if (v.ownerId === p.id && !v.isCity) { v.isCity = true; p.cities.push(id); p.settlements = p.settlements.filter(s => s !== id); this.returnResources(p, COSTS.CITY); this.log('Built City'); }
       }
     }
-    this.players.forEach(pl => pl.calculateVP(this.longestRoadHolderId));
+    this.players.forEach(pl => pl.calculateVP(this.longestRoadHolderId, this.largestArmyHolderId));
     this.checkWinner();
     if (!this.currentPlayer.isBot && typeof setupTradeUI === 'function') setupTradeUI();
   }
@@ -849,6 +1187,7 @@ class GameState {
       }
     } else { 
       this.phase = 'PLAY'; this.currentPlayerIdx = 0; this.log('Play Phase Started!'); 
+      this.players.forEach(p => p.calculateVP(this.longestRoadHolderId, this.largestArmyHolderId));
       if (this.currentPlayer.isBot) {
         const token = this.turnToken;
         setTimeout(() => { if (token === this.turnToken) this.aiTurn(); }, 1000);
@@ -954,7 +1293,7 @@ class GameState {
 
   checkWinner() { 
     this.players.forEach(p => { 
-        if (p.calculateVP(this.longestRoadHolderId) >= this.targetScore) {
+        if (p.calculateVP(this.longestRoadHolderId, this.largestArmyHolderId) >= this.targetScore) {
             if (!this.winner) {
                 this.winner = p;
                 // If only bots mode, restart after 5 seconds
@@ -975,9 +1314,34 @@ class CanvasRenderer {
     this.canvas = canvas; this.ctx = canvas.getContext('2d');
     this.board = board;
     this.camera = { x: 0, y: 0, zoom: 1.0 };
+    this.diceCanvas = document.getElementById('diceCanvas');
+    this.diceCtx = this.diceCanvas ? this.diceCanvas.getContext('2d') : null;
   }
   render(gs, hover) {
-    if (gs.diceAnim.timer > 0) gs.diceAnim.timer--;
+    if (gs.diceAnim.timer > 0) {
+        gs.diceAnim.timer--;
+        // Randomize dice values during the "shaking" phase (first 0.5s / 30 frames)
+        if (gs.diceAnim.timer > 72) {
+            // Slower roll speed: update every 8 frames instead of 4
+            if (gs.diceAnim.timer % 8 === 0) {
+                gs.diceAnim.value = [Math.floor(Math.random() * 6) + 1, Math.floor(Math.random() * 6) + 1];
+            }
+        } else {
+            // Lock in the real values for the pause and fade phase (last 72 frames)
+            gs.diceAnim.value = [...gs.dice];
+        }
+    }
+    
+    // Update permanent dice display
+    if (this.diceCtx) {
+        this.diceCtx.clearRect(0, 0, this.diceCanvas.width, this.diceCanvas.height);
+        const diceSize = 80;
+        // Show real values once rolling ends (after 30 frames)
+        const currentDice = (gs.diceAnim.timer > 72) ? gs.diceAnim.value : gs.dice;
+        this.drawDiceToCtx(this.diceCtx, 10, 10, currentDice[0], diceSize);
+        this.drawDiceToCtx(this.diceCtx, 10 + diceSize + 20, 10, currentDice[1], diceSize);
+    }
+
     this.ctx.clearRect(0,0,this.canvas.width,this.canvas.height);
     const isHumanTurn = !gs.currentPlayer.isBot;
     
@@ -986,8 +1350,9 @@ class CanvasRenderer {
     this.ctx.translate(this.canvas.width/2 + this.camera.x, this.canvas.height/2 + this.camera.y);
     this.ctx.scale(this.camera.zoom, this.camera.zoom);
 
-    // Draw Sea Background
-    const seaSize = (this.board.radius + 1.8) * this.board.hexSize * 1.5;
+    // Draw Sea Background (Dynamic buffer based on board radius)
+    const seaBuffer = this.board.radius >= 3 ? 2.25 : 1.9;
+    const seaSize = (this.board.radius + seaBuffer) * this.board.hexSize * 1.5;
     this.drawPoly(0, 0, 6, seaSize, HEX_TYPES.WATER.color, false);
 
     this.board.hexes.forEach((h, id) => {
@@ -1069,7 +1434,7 @@ class CanvasRenderer {
       const v2 = this.board.getVertex(port.v2);
       const cx = (v1.x + v2.x) / 2, cy = (v1.y + v2.y) / 2;
       const angle = Math.atan2(cy, cx);
-      const ox = Math.cos(angle) * 15, oy = Math.sin(angle) * 15;
+      const ox = Math.cos(angle) * 28, oy = Math.sin(angle) * 28;
 
       this.ctx.strokeStyle = 'rgba(255,255,255,0.6)'; this.ctx.lineWidth = 4;
       this.ctx.beginPath(); this.ctx.moveTo(v1.x, v1.y); this.ctx.lineTo(cx + ox, cy + oy); this.ctx.lineTo(v2.x, v2.y); this.ctx.stroke();
@@ -1126,8 +1491,7 @@ class CanvasRenderer {
                               robberPanel.style.display === 'flex' || 
                               tradeOfferPanel.style.display === 'flex' ||
                               discardPanel.style.display === 'flex' ||
-                              document.getElementById('victory-panel').style.display === 'flex' ||
-                              (gs && gs.waitingForDiscards.length > 0));
+                              document.getElementById('victory-panel').style.display === 'flex');
     
     if (isAnyModalVisible) {
         this.ctx.fillStyle = 'rgba(0,0,0,0.35)';
@@ -1137,12 +1501,25 @@ class CanvasRenderer {
     this.drawUI(gs);
 
     if (gs.diceAnim.timer > 0) {
-        const opacity = Math.min(1, gs.diceAnim.timer / 30);
+        // Fade out only in the last 0.4s (24 frames)
+        const opacity = Math.min(1, gs.diceAnim.timer / 24);
         this.ctx.globalAlpha = opacity;
+
+        // Growth effect: Scale up by 25% after the dice stop rolling
+        let sizeScale = 1.0;
+        if (gs.diceAnim.timer <= 72) {
+            // Grow over 15 frames immediately after the "shaking" ends
+            const growthProgress = Math.min(1, (72 - gs.diceAnim.timer) / 15);
+            sizeScale = 1.0 + (growthProgress * 0.25);
+        }
+
         const centerX = this.canvas.width / 2, centerY = this.canvas.height / 2;
-        const size = 100;
-        this.drawDice(centerX - size - 10, centerY - size/2, gs.diceAnim.value[0], size);
-        this.drawDice(centerX + 10, centerY - size/2, gs.diceAnim.value[1], size);
+        const baseSize = 100;
+        const size = baseSize * sizeScale;
+
+        // Added a bit more spacing (15px) to accommodate the larger scale
+        this.drawDice(centerX - size - 15, centerY - size/2, gs.diceAnim.value[0], size);
+        this.drawDice(centerX + 15, centerY - size/2, gs.diceAnim.value[1], size);
         this.ctx.globalAlpha = 1.0;
     }
   }
@@ -1151,22 +1528,44 @@ class CanvasRenderer {
     this.ctx.beginPath(); for(let i=0;i<s;i++){const a=2*Math.PI*i/s; this.ctx.lineTo(x+sz*Math.cos(a), y+sz*Math.sin(a));} this.ctx.closePath(); this.ctx.fill(); this.ctx.stroke();
   }
   drawDice(x, y, value, size = 35) {
-    this.ctx.fillStyle = '#eee';
-    this.ctx.fillRect(x, y, size, size);
-    this.ctx.strokeStyle = '#333';
-    this.ctx.lineWidth = size / 20;
-    this.ctx.strokeRect(x, y, size, size);
+    this.drawDiceToCtx(this.ctx, x, y, value, size);
+  }
+  drawDiceToCtx(ctx, x, y, value, size = 35) {
+    const radius = size * 0.15; // Rounded corners
+    ctx.fillStyle = '#eee';
+    ctx.beginPath();
+    ctx.moveTo(x + radius, y);
+    ctx.lineTo(x + size - radius, y);
+    ctx.quadraticCurveTo(x + size, y, x + size, y + radius);
+    ctx.lineTo(x + size, y + size - radius);
+    ctx.quadraticCurveTo(x + size, y + size, x + size - radius, y + size);
+    ctx.lineTo(x + radius, y + size);
+    ctx.quadraticCurveTo(x, y + size, x, y + size - radius);
+    ctx.lineTo(x, y + radius);
+    ctx.quadraticCurveTo(x, y, x + radius, y);
+    ctx.closePath();
+    ctx.fill();
 
-    this.ctx.fillStyle = '#000';
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = size / 20;
+    ctx.stroke();
+
+    ctx.fillStyle = '#000';
     const dot = size / 10;
     const mid = size / 2;
     const q1 = size / 4;
     const q3 = (size / 4) * 3;
 
-    if (value === 1 || value === 3 || value === 5) this.drawDot(x + mid, y + mid, dot);
-    if (value >= 2) { this.drawDot(x + q1, y + q1, dot); this.drawDot(x + q3, y + q3, dot); }
-    if (value >= 4) { this.drawDot(x + q3, y + q1, dot); this.drawDot(x + q1, y + q3, dot); }
-    if (value === 6) { this.drawDot(x + q1, y + mid, dot); this.drawDot(x + q3, y + mid, dot); }
+    const drawDotToCtx = (cx, cy, r) => {
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.fill();
+    };
+
+    if (value === 1 || value === 3 || value === 5) drawDotToCtx(x + mid, y + mid, dot);
+    if (value >= 2) { drawDotToCtx(x + q1, y + q1, dot); drawDotToCtx(x + q3, y + q3, dot); }
+    if (value >= 4) { drawDotToCtx(x + q3, y + q1, dot); drawDotToCtx(x + q1, y + q3, dot); }
+    if (value === 6) { drawDotToCtx(x + q1, y + mid, dot); drawDotToCtx(x + q3, y + mid, dot); }
   }
   drawDot(x, y, r) { this.ctx.beginPath(); this.ctx.arc(x, y, r, 0, Math.PI * 2); this.ctx.fill(); }
 
@@ -1175,7 +1574,7 @@ class CanvasRenderer {
 
     // --- LEFT PANEL: TURN & ACTION ---
     const ACTION_WIDTH = isMobile ? 130 : 180;
-    const ACTION_HEIGHT = isMobile ? 180 : 220;
+    const ACTION_HEIGHT = isMobile ? 280 : 320;
     this.ctx.fillStyle = 'rgba(50,50,50,0.75)';
     this.ctx.fillRect(10, 10, ACTION_WIDTH, ACTION_HEIGHT);
     this.ctx.strokeStyle = '#fff'; this.ctx.lineWidth = 1; this.ctx.strokeRect(10, 10, ACTION_WIDTH, ACTION_HEIGHT);
@@ -1196,17 +1595,26 @@ class CanvasRenderer {
       this.ctx.fillText(gs.currentPlayer.name, 20, isMobile ? 40 : 45);
     }
 
-    const diceSize = isMobile ? 25 : 30;
-    this.drawDice(20, isMobile ? 60 : 65, gs.dice[0], diceSize);
-    this.drawDice(20 + diceSize + 5, isMobile ? 60 : 65, gs.dice[1], diceSize);
-
-    let ly = isMobile ? 95 : 105;
-    this.ctx.fillStyle = '#fff';
-    this.ctx.font = isMobile ? 'bold 10px Arial' : 'bold 11px Arial';
-    this.ctx.fillText('YOUR RESOURCES:', 20, ly);
+    let ly = isMobile ? 65 : 70;
     const human = gs.players[0];
+    const humanTotal = Object.values(human.resources).reduce((a, b) => a + b, 0);
+    
+    this.ctx.fillStyle = humanTotal > 7 ? '#ff4444' : '#fff'; // Red if at risk
+    this.ctx.font = isMobile ? 'bold 10px Arial' : 'bold 11px Arial';
+    this.ctx.fillText(humanTotal > 7 ? 'YOUR RESOURCES: ⚠️' : 'YOUR RESOURCES:', 20, ly);
+    
     this.ctx.font = isMobile ? '9px Arial' : '11px Arial';
     Object.entries(human.resources).forEach(([r, v]) => {
+      ly += isMobile ? 12 : 15;
+      this.ctx.fillText(`${r}: ${v}`, 30, ly);
+    });
+
+    ly += isMobile ? 15 : 20;
+    this.ctx.fillStyle = '#aaa';
+    this.ctx.font = isMobile ? 'bold 10px Arial' : 'bold 11px Arial';
+    this.ctx.fillText('BANK RESOURCES:', 20, ly);
+    this.ctx.font = isMobile ? '9px Arial' : '11px Arial';
+    Object.entries(gs.bankResources).forEach(([r, v]) => {
       ly += isMobile ? 12 : 15;
       this.ctx.fillText(`${r}: ${v}`, 30, ly);
     });
@@ -1239,8 +1647,9 @@ class CanvasRenderer {
     this.ctx.fillStyle = '#aaa';
     this.ctx.fillText('PLAYER', rx + 15, ry + (isMobile ? 30 : 40));
     this.ctx.fillText('VP', rx + (isMobile ? 100 : 120), ry + (isMobile ? 30 : 40));
-    this.ctx.fillText('RD', rx + (isMobile ? 125 : 150), ry + (isMobile ? 30 : 40));
-    this.ctx.fillText('RES', rx + (isMobile ? 150 : 180), ry + (isMobile ? 30 : 40));
+    this.ctx.fillText('RD', rx + (isMobile ? 123 : 148), ry + (isMobile ? 30 : 40));
+    this.ctx.fillText('DEV', rx + (isMobile ? 143 : 173), ry + (isMobile ? 30 : 40));
+    this.ctx.fillText('RES', rx + (isMobile ? 168 : 203), ry + (isMobile ? 30 : 40));
 
     let py = ry + (isMobile ? 45 : 60);
     gs.players.forEach(p => {
@@ -1248,14 +1657,31 @@ class CanvasRenderer {
       this.ctx.font = isMobile ? 'bold 10px Arial' : 'bold 12px Arial';
       let nameText = p.name;
       if (gs.longestRoadHolderId === p.id) nameText += ' 🏆';
+      if (gs.largestArmyHolderId === p.id) nameText += ' ⚔️';
       this.ctx.fillText(nameText.substring(0, isMobile ? 10 : 12), rx + 15, py);
       
       this.ctx.fillStyle = '#fff';
       this.ctx.font = isMobile ? '10px Arial' : '12px Arial';
-      this.ctx.fillText(p.victoryPoints, rx + (isMobile ? 100 : 120), py);
-      this.ctx.fillText(gs.calculateLongestPath(p.id), rx + (isMobile ? 125 : 150), py);
+      
+      let vpText = `${p.visibleVP}`;
+      const vpCardsCount = p.devCards.filter(c => c.type === 'VP').length;
+      if (vpCardsCount > 0 && (p.id === 0 || gs.winner)) {
+        vpText += ` (${p.visibleVP + vpCardsCount})`;
+      }
+      this.ctx.fillText(vpText, rx + (isMobile ? 100 : 120), py);
+
+      this.ctx.fillText(gs.calculateLongestPath(p.id), rx + (isMobile ? 123 : 148), py);
+      this.ctx.fillText(p.devCards.length.toString(), rx + (isMobile ? 143 : 173), py);
       const totalRes = Object.values(p.resources).reduce((a, b) => a + b, 0);
-      this.ctx.fillText(totalRes, rx + (isMobile ? 150 : 180), py);
+      
+      if (totalRes > 7) {
+        this.ctx.fillStyle = '#ff4444'; // Red for danger
+        this.ctx.font = isMobile ? 'bold 10px Arial' : 'bold 12px Arial';
+        this.ctx.fillText(totalRes + ' ⚠️', rx + (isMobile ? 168 : 203), py);
+      } else {
+        this.ctx.fillStyle = '#fff';
+        this.ctx.fillText(totalRes, rx + (isMobile ? 168 : 203), py);
+      }
       py += isMobile ? 16 : 20;
     });
 
@@ -1315,7 +1741,7 @@ class InputHandler {
             robberPanel.style.display === 'flex' || 
             tradeOfferPanel.style.display === 'flex' || 
             discardPanel.style.display === 'flex' ||
-            (this.gs && this.gs.waitingForDiscards.length > 0));
+            resourcePickerPanel.style.display === 'flex');
   }
 
   getGameXY(e) {
@@ -1479,6 +1905,18 @@ class InputHandler {
             }
             this.gs.moveRobber(this.hover.id);
         }
+    } else if (this.gs.pendingRoads > 0) {
+        if (this.hover.type === 'edge') {
+            const e = this.board.getEdge(this.hover.id);
+            if (e.ownerId === null && Rules.canPlaceRoad(this.board, this.hover.id, this.gs.players[0])) {
+                e.ownerId = 0; 
+                this.gs.players[0].roads.push(this.hover.id);
+                this.gs.updateLongestRoad();
+                this.gs.pendingRoads--;
+                this.gs.log(`Placed free road! ${this.gs.pendingRoads} remaining.`);
+                if (this.gs.pendingRoads === 0) this.gs.log('Finished playing Road Building.');
+            }
+        }
     } else if(this.hover.type==='vertex' && !this.gs.winner) {
         const v = this.board.getVertex(this.hover.id);
         if(v.ownerId===null) this.gs.build('SETTLEMENT', this.hover.id);
@@ -1537,6 +1975,8 @@ const tradeGetContainer = document.getElementById('trade-get');
 const tradeGetLabel = document.getElementById('trade-get-label');
 const tradeBtn = document.getElementById('tradeBtn');
 const bankTradeBtn = document.getElementById('bankTradeBtn');
+const buyDevBtn = document.getElementById('buyDevBtn');
+const devCardContainer = document.getElementById('dev-card-container');
 const playerTradePanel = document.getElementById('player-trade-panel');
 const tradeTargetSelect = document.getElementById('tradeTarget');
 const tradeGiveControls = document.getElementById('trade-give-controls');
@@ -1548,6 +1988,8 @@ const discardPanel = document.getElementById('discard-panel');
 const victoryPanel = document.getElementById('victory-panel');
 const discardControls = document.getElementById('discard-controls');
 const confirmDiscardBtn = document.getElementById('confirmDiscardBtn');
+const resourcePickerPanel = document.getElementById('resource-picker-panel');
+const cancelPickerBtn = document.getElementById('cancelPickerBtn');
 
 let tradeGiveSelection = null;
 let playerTradeOffer = { WOOD: 0, BRICK: 0, SHEEP: 0, WHEAT: 0, ORE: 0 };
@@ -1612,9 +2054,7 @@ function setupDiscardUI(totalToDiscard) {
     };
 
     confirmDiscardBtn.onclick = () => {
-        Object.entries(discardSelection).forEach(([res, amt]) => {
-            p.resources[res] -= amt;
-        });
+        gs.returnResources(p, discardSelection);
         gs.log(`You discarded ${totalToDiscard} cards.`);
         gs.confirmDiscard(0);
     };
@@ -1628,10 +2068,14 @@ function setupTradeUI() {
     // Reset any active UI states
     isTradingWithBank = false;
     isProposingTrade = false;
+    setupDevCardUI(); 
 
     const p = gs.currentPlayer;
     const resources = ['WOOD', 'BRICK', 'SHEEP', 'WHEAT', 'ORE'];
     
+    buyDevBtn.disabled = !p.canAfford(COSTS.DEV_CARD) || gs.devCardDeck.length === 0 || !gs.hasRolled;
+    buyDevBtn.style.opacity = buyDevBtn.disabled ? '0.5' : '1.0';
+
     // Bank Trade UI Reset
     tradeGiveContainer.innerHTML = '';
     tradeGetContainer.innerHTML = '';
@@ -1676,6 +2120,15 @@ function setupTradeUI() {
         isTradingWithBank = true;
     };
 
+    buyDevBtn.onclick = () => {
+        if (gs.buyDevCard(gs.currentPlayer)) {
+           setupTradeUI();
+           setupDevCardUI(); 
+        } else {
+           gs.log("Bank: Out of Development Cards or not enough resources!");
+        }
+    };
+
     // Player Trade Button Handler
     tradeBtn.onclick = () => {
         const p = gs.currentPlayer;
@@ -1687,6 +2140,70 @@ function setupTradeUI() {
         isProposingTrade = true;
         setupPlayerTradeUI();
     };
+}
+
+function setupDevCardUI() {
+    if (!gs || gs.currentPlayerIdx !== 0) {
+        devCardContainer.style.display = 'none';
+        return;
+    }
+    const p = gs.currentPlayer;
+    devCardContainer.innerHTML = '';
+    
+    if (p.devCards.length === 0) {
+        devCardContainer.style.display = 'none';
+        return;
+    }
+
+    devCardContainer.style.display = 'flex';
+    p.devCards.forEach((card, idx) => {
+        const div = document.createElement('div');
+        div.className = 'dev-card';
+        div.style.background = '#34495e';
+        div.style.border = '1px solid #7f8c8d';
+        div.style.borderRadius = '4px';
+        div.style.padding = '5px';
+        div.style.minWidth = '80px';
+        div.style.cursor = 'pointer';
+        div.style.display = 'flex';
+        div.style.flexDirection = 'column';
+        div.style.alignItems = 'center';
+        div.style.gap = '2px';
+
+        const name = document.createElement('span');
+        name.innerText = card.name;
+        name.style.fontWeight = 'bold'; name.style.fontSize = '10px';
+        name.style.color = '#f1c40f';
+
+        const desc = document.createElement('span');
+        desc.innerText = card.desc;
+        desc.style.fontSize = '8px'; desc.style.textAlign = 'center';
+        desc.style.color = '#ecf0f1';
+
+        div.appendChild(name);
+        div.appendChild(desc);
+
+        const canPlay = card.type !== 'VP' && card.boughtTurn < gs.turnToken && !gs.playedDevCardThisTurn && gs.hasRolled && !gs.movingRobber;
+        div.style.opacity = canPlay ? '1.0' : '0.5';
+        
+        if (canPlay) {
+            div.onclick = () => {
+                if (gs.playDevCard(p, idx)) {
+                    setupDevCardUI();
+                    setupTradeUI();
+                }
+            };
+        } else if (card.type === 'VP') {
+            div.style.border = '2px solid gold';
+            div.style.cursor = 'default';
+        } else if (card.boughtTurn === gs.turnToken) {
+            const label = document.createElement('span');
+            label.innerText = '(New)'; label.style.fontSize = '8px'; label.style.color = '#e67e22';
+            div.appendChild(label);
+        }
+
+        devCardContainer.appendChild(div);
+    });
 }
 
 function setupPlayerTradeUI() {
@@ -1844,9 +2361,11 @@ window.addEventListener('resize', resize); resize();
 
 let board, players, gs, ren, inp;
 let lastGameConfig = null;
+let isOnlyBotsMode = false;
 
 function resetGame(config) {
   lastGameConfig = config;
+  isOnlyBotsMode = config.onlyBots;
   const { aiCount, boardRadius, winPoints, friendlyRobber, aiDifficulty, onlyBots } = config;
 
   // Update rule text
@@ -1936,7 +2455,8 @@ function loop() {
   tradePanel.style.display = (gs.phase === 'PLAY' && isHumanTurn && !inRobberActions && !inDiscardActions && isTradingWithBank && !isWinning) ? 'flex' : 'none';
   playerTradePanel.style.display = (gs.phase === 'PLAY' && isHumanTurn && !inRobberActions && !inDiscardActions && isProposingTrade && !isWinning) ? 'flex' : 'none';
   robberPanel.style.display = (gs.phase === 'PLAY' && isHumanTurn && gs.waitingToPickVictim && !isWinning) ? 'flex' : 'none';
-  discardPanel.style.display = (inDiscardActions && gs.waitingForDiscards.includes(0) && !isWinning) ? 'flex' : 'none';
+  const humanInDiscard = gs.waitingForDiscards.includes(0) && !isOnlyBotsMode;
+  discardPanel.style.display = (humanInDiscard && !isWinning) ? 'flex' : 'none';
   
   if (isWinning) {
       victoryPanel.style.display = 'flex';

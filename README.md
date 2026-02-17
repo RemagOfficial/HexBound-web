@@ -18,6 +18,7 @@ HexBound is a browser-based, high-performance strategy game and simulation engin
 *   **🔍 Zoom**: Use the **Mouse Wheel** (Desktop) or **Pinch-to-Zoom** (Mobile) to scale the board.
 *   **🛠️ Build**: Click **Vertices** to build Settlements/Cities and **Edges** to build Roads. Valid locations pulse with cyan/gold highlights after your roll.
 *   **🎲 Actions**: Use the control bar to **Roll Dice**, **End Turn**, or perform **Trades**.
+*   **✨ Dice Visuals**: Experience a high-polish dice system with a centralized animation that follows a **Roll, Grow, Pause, and Fade** sequence for maximum clarity.
 
 ## 🏆 Game Mechanics
 
@@ -25,13 +26,23 @@ HexBound is a browser-based, high-performance strategy game and simulation engin
 *   **Settlement (1 VP)**: Costs 1 Wood, 1 Brick, 1 Sheep, 1 Wheat.
 *   **City (2 VP)**: Costs 3 Ore, 2 Wheat (Upgrades an existing Settlement).
 *   **Roads**: Costs 1 Wood, 1 Brick. Used to expand your reach.
+*   **Development Cards**: Costs 1 Ore, 1 Sheep, 1 Wheat. Bought at random.
 *   **Longest Road (+2 VP)**: Awarded to the player with the longest continuous path (min 5).
+*   **Largest Army (+2 VP)**: Awarded to the player who has played the most Knight cards (min 3).
 
-### 2. Trading
-*   **Bank Trade**: Trade resources at the bank (default 4:1). Rate improves to 3:1 or 2:1 by building on **Ports**.
-*   **Player Trade**: Propose custom trades to AI opponents. You can specify exactly what to **Give** and **Get**. Skilled AI will evaluate trades based on their current needs and surplus.
+### 2. Trading & Ports
+*   **Bank Trade**: Trade resources at the bank (default 4:1). Rate improves to 3:1 (Generic Port) or 2:1 (Specialized Port).
+*   **Bank Scarcity**: The bank has a limited supply (19-24 per resource). If a resource is depleted, rolls will not distribute it until cards are returned!
+*   **Player Trade**: Propose custom trades to AI opponents. Skilled AI will evaluate trades based on their current needs and "panic trade" if they have too many cards.
 
-### 3. The Robber & Manual Discarding
+### 3. Expansion Mechanics (5-6 Players)
+*   **Dynamic Scaling**: The deck size and bank resources automatically scale when 5 or 6 players are in the session.
+*   **Development Cards**: 
+    *   **Knight**: Move the Robber and steal from an adjacent player.
+    *   **Progress Cards**: Road Building (2 free roads), Year of Plenty/Invention (2 resources), and Monopoly (Take all resources of one type from others).
+    *   **Victory Points**: Hidden +1 VP cards.
+
+### 4. The Robber & Manual Discarding
 *   **Rolling a 7**: Pauses the game for a special phase:
     *   **Manual Discard**: Any player (human or AI) with more than 7 cards must select exactly half of their hand to lose.
     *   **Move Robber**: The current player moves the grey Robber to block a hex from producing resources.
@@ -49,6 +60,8 @@ HexBound is a browser-based, high-performance strategy game and simulation engin
 *   **Victory Screen**: Once a player reaches the target score, a dedicated victory panel appears with options to **Replay** (same settings) or start a **New Game**.
 *   **Concurrency Control**: A `turnToken` system ensures that delayed AI actions never bleed into human turns, providing a glitch-free turn-based experience.
 *   **Visual Dimming**: The game board automatically dims when a modal is active, keeping focus on vital decisions while keeping the HUD visible.
+*   **Interactive Rules**: A toggleable, scrolling rules panel built directly into the UI for quick reference during play.
+*   **Dynamic Backgrounds**: The sea buffer dynamically adjusts based on board size to prevent clipping of ports and border tiles.
 
 ## 🛠 Technical Overview
 
