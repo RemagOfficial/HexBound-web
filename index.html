@@ -47,10 +47,17 @@
             left: 50%;
             transform: translateX(-50%);
             display: flex;
+            flex-direction: column;
+            align-items: center;
             gap: 10px;
             background: rgba(0,0,0,0.5);
             padding: 10px;
             border-radius: 8px;
+        }
+
+        .main-btns {
+            display: flex;
+            gap: 10px;
         }
 
         button {
@@ -96,28 +103,132 @@
         .rules-hint li {
             margin-bottom: 5px;
         }
+
+        /* Menu Overlay */
+        #menu-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(44, 62, 80, 0.95);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .menu-card {
+            background: #34495e;
+            padding: 40px;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            border: 1px solid #7f8c8d;
+            min-width: 400px;
+            text-align: center;
+        }
+
+        .menu-card h1 {
+            font-size: 36px;
+            margin-bottom: 20px;
+            color: #f1c40f;
+            letter-spacing: 4px;
+        }
+
+        .option-group {
+            margin-bottom: 25px;
+            text-align: left;
+        }
+
+        .option-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: bold;
+            color: #bdc3c7;
+        }
+
+        .option-group select, .option-group input {
+            width: 100%;
+            padding: 10px;
+            background: #2c3e50;
+            border: 1px solid #7f8c8d;
+            color: white;
+            border-radius: 4px;
+            font-size: 16px;
+        }
+
+        #game-interface {
+            display: none; /* Hidden until game starts */
+        }
     </style>
 </head>
 <body>
-    <div id="game-container">
-        <canvas id="gameCanvas"></canvas>
-        <div id="controls">
-            <button id="rollBtn" disabled>Roll Dice</button>
-            <button id="endBtn" disabled>End Turn</button>
+    <div id="menu-overlay">
+        <div class="menu-card">
+            <h1>HEXBOUND</h1>
+            <div class="option-group">
+                <label>Number of AI Opponents</label>
+                <select id="aiCount">
+                    <option value="1">1 AI</option>
+                    <option value="2">2 AIs</option>
+                    <option value="3" selected>3 AIs</option>
+                </select>
+            </div>
+            <div class="option-group">
+                <label>Board Size</label>
+                <select id="boardSize">
+                    <option value="1">Small (7 Hexes)</option>
+                    <option value="2" selected>Standard (19 Hexes)</option>
+                    <option value="3">Large (37 Hexes)</option>
+                </select>
+            </div>
+            <div class="option-group">
+                <label>Victory Points to Win: <span id="winPointsValue">10</span></label>
+                <input type="range" id="winPoints" min="3" max="25" value="10" style="padding:0; margin-top:10px;">
+                <small id="winLimitHint" style="display:block;margin-top:5px;color:#95a5a6;font-size:12px;">Based on Board Size</small>
+            </div>
+            <div class="option-group" style="display: flex; align-items: center; gap: 10px;">
+                <input type="checkbox" id="friendlyRobber" style="width: 20px;">
+                <label style="margin-bottom: 0;">Friendly Robber (Safe at 2 pts)</label>
+            </div>
+            <button id="startGameBtn">Start Game</button>
         </div>
-        <div class="rules-hint">
-            <strong>QUICK RULES</strong>
-            <ul>
-                <li><strong>Initial Phase:</strong> Click a vertex for settlement, then an adjacent edge for a road. Repeats twice.</li>
-                <li><strong>Turn Flow:</strong> Roll Dice &rarr; Distribute Resources &rarr; Build &rarr; End Turn.</li>
-                <li><strong>Building:</strong> Settlement must be 2 edges away from any other structure.</li>
-                <li><strong>Costs:</strong>
-                    <br>&bull; Road: 1 Wood, 1 Brick
-                    <br>&bull; Settlement: 1 Wood, 1 Brick, 1 Sheep, 1 Wheat
-                    <br>&bull; City: 3 Ore, 2 Wheat (Upgrades Settlement)
-                </li>
-                <li><strong>Victory:</strong> Reach 10 points (Settlement=1, City=2).</li>
-            </ul>
+    </div>
+
+    <div id="game-interface">
+        <div id="game-container">
+            <canvas id="gameCanvas"></canvas>
+            <div id="controls">
+                <div class="main-btns">
+                    <button id="rollBtn" disabled>Roll Dice</button>
+                    <button id="endBtn" disabled>End Turn</button>
+                    <button id="resetCamBtn" style="background: #7f8c8d; font-size: 11px;">Reset View</button>
+                </div>
+                <div id="trade-panel" style="display:none; background: rgba(0,0,0,0.8); padding: 12px; border-radius: 8px; flex-direction: column; gap: 10px; width: 340px; border: 1px solid #f1c40f;">
+                  <div style="font-size: 13px; color: #f1c40f; font-weight: bold; text-align: center; letter-spacing: 1px;">BANK TRADE (4:1)</div>
+                  <div style="font-size: 10px; color: #aaa; text-align: center;">1. Select what to GIVE</div>
+                  <div id="trade-give" style="display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; padding-bottom: 5px;"></div>
+                  <div id="trade-get-label" style="font-size: 10px; color: #aaa; text-align: center; display: none;">2. Select what to GET</div>
+                  <div id="trade-get" style="display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; display: none;"></div>
+                </div>
+            </div>
+            <div class="rules-hint">
+                <strong>QUICK RULES</strong>
+                <ul>
+                    <li><strong>Initial Phase:</strong> Click a vertex for settlement, then an adjacent edge for a road. Repeats twice.</li>
+                    <li><strong>Turn Flow:</strong> Roll Dice &rarr; Distribute Resources &rarr; Build &rarr; End Turn.</li>
+                    <li><strong>The Robber:</strong> Rolling a 7 lets you move the Robber. It blocks resource production on that tile.</li>
+                    <li><strong>Bank Trade:</strong> Trade 4 of any resource for 1 of your choice (if you have enough).</li>
+                    <li><strong>Building:</strong> Settlement must be 2 edges away from any other structure.</li>
+                    <li><strong>Costs:</strong>
+                        <br>&bull; Road: 1 Wood, 1 Brick
+                        <br>&bull; Settlement: 1 Wood, 1 Brick, 1 Sheep, 1 Wheat
+                        <br>&bull; City: 3 Ore, 2 Wheat (Upgrades Settlement)
+                    </li>
+                    <li id="ruleWinPoints"><strong>Victory:</strong> Reach 10 points.</li>
+                </ul>
+            </div>
         </div>
     </div>
     <script src="main.js"></script>
