@@ -326,16 +326,60 @@ class GameState {
 
   toJSON() {
     return {
-      ...this,
       board: this.board.toJSON(),
-      players: this.players.map(p => p.toJSON())
+      players: this.players.map(p => p.toJSON()),
+      currentPlayerIdx: (this.currentPlayerIdx === undefined) ? null : this.currentPlayerIdx,
+      phase: (this.phase === undefined) ? 'INITIAL' : this.phase,
+      turnToken: (this.turnToken === undefined) ? 0 : this.turnToken,
+      hasRolled: !!this.hasRolled,
+      dice: this.dice || [1, 1],
+      robberHexId: (this.robberHexId === undefined) ? null : this.robberHexId,
+      movingRobber: !!this.movingRobber,
+      waitingToPickVictim: !!this.waitingToPickVictim,
+      waitingForDiscards: this.waitingForDiscards || [],
+      playedDevCardThisTurn: !!this.playedDevCardThisTurn,
+      history: this.history || [],
+      winner: (this.winner === undefined) ? null : this.winner,
+      bankResources: this.bankResources || {},
+      devCardDeck: this.devCardDeck || [],
+      largestArmyHolderId: (this.largestArmyHolderId === undefined) ? null : this.largestArmyHolderId,
+      longestRoadHolderId: (this.longestRoadHolderId === undefined) ? null : this.longestRoadHolderId,
+      activeTrade: (this.activeTrade === undefined) ? null : this.activeTrade,
+      aiTradeAttempts: (this.aiTradeAttempts === undefined) ? 0 : this.aiTradeAttempts,
+      pendingRoads: (this.pendingRoads === undefined) ? 0 : this.pendingRoads,
+      pendingSettlement: (this.pendingSettlement === undefined) ? null : this.pendingSettlement,
+      initialPlacements: (this.initialPlacements === undefined) ? 0 : this.initialPlacements,
+      targetScore: (this.targetScore === undefined) ? 10 : this.targetScore,
+      friendlyRobber: !!this.friendlyRobber,
+      aiDifficulty: this.aiDifficulty || 'Normal'
     };
   }
 
   fromJSON(data) {
+    const oldIdx = this.currentPlayerIdx;
+    const oldToken = this.turnToken;
+
     this.board.fromJSON(data.board);
     data.players.forEach((pData, idx) => {
+        if (!this.players[idx]) {
+            this.players[idx] = Player.fromJSON(pData);
+        }
+        const wasBot = this.players[idx].isBot;
         this.players[idx].fromJSON(pData);
+        // If a human became a bot (via abandonment), the host should now drive their turn
+        if (!wasBot && this.players[idx].isBot && gameSync.isHost) {
+            if (this.waitingForDiscards.includes(idx)) {
+                const totalRes = Object.values(this.players[idx].resources).reduce((a, b) => a + b, 0);
+                setTimeout(() => this.aiDiscard(idx, Math.floor(totalRes / 2)), 1000);
+            } else if (this.currentPlayerIdx === idx) {
+                const token = this.turnToken;
+                if (this.phase === 'INITIAL') {
+                    setTimeout(() => { if (token === this.turnToken) this.aiInitial(); }, 1000);
+                } else if (!this.winner) {
+                    setTimeout(() => { if (token === this.turnToken) this.aiTurn(); }, 1000);
+                }
+            }
+        }
     });
     // Copy other fields
     Object.keys(data).forEach(key => {
@@ -343,6 +387,18 @@ class GameState {
             this[key] = data[key];
         }
     });
+
+    // WAKE UP AI: If turn changed to a bot and we are the host, trigger AI logic
+    if (gameSync.isHost && (this.currentPlayerIdx !== oldIdx || this.turnToken !== oldToken)) {
+        if (this.currentPlayer.isBot && !this.winner) {
+            const token = this.turnToken;
+            if (this.phase === 'INITIAL') {
+                setTimeout(() => { if (token === this.turnToken) this.aiInitial(); }, 1000);
+            } else {
+                setTimeout(() => { if (token === this.turnToken) this.aiTurn(); }, 1000);
+            }
+        }
+    }
   }
 
   static fromJSON(data) {
@@ -438,10 +494,10 @@ class GameState {
 
   showYearOfPlentyMenu() {
     this.openResourcePicker("Pick 1st Resource", (res1) => {
-        this.giveResources(this.players[0], res1, 1);
+        this.giveResources(this.players[gameSync.localPlayerId], res1, 1);
         setTimeout(() => {
             this.openResourcePicker("Pick 2nd Resource", (res2) => {
-                this.giveResources(this.players[0], res2, 1);
+                this.giveResources(this.players[gameSync.localPlayerId], res2, 1);
                 setupTradeUI();
                 setupDevCardUI();
             });
@@ -451,7 +507,7 @@ class GameState {
 
   showMonopolyMenu() {
     this.openResourcePicker("Pick Resource to Steal", (res) => {
-        this.monopolyResource(this.players[0], res);
+        this.monopolyResource(this.players[gameSync.localPlayerId], res);
         setupTradeUI();
         setupDevCardUI();
     });
@@ -529,7 +585,7 @@ class GameState {
     }
     
     // Multiplayer Sync on Turn Change
-    if (gameSync.isMultiplayer && gameSync.isHost) gameSync.update(this, true);
+    if (gameSync.isMultiplayer) gameSync.update(this, true);
 
     if (this.currentPlayer.isBot && !this.winner) {
       const token = this.turnToken;
@@ -923,9 +979,9 @@ class GameState {
       });
       
       if (this.waitingForDiscards.length > 0) {
-          const humanNeedsDiscard = this.waitingForDiscards.includes(0) && !isOnlyBotsMode;
+          const humanNeedsDiscard = this.waitingForDiscards.includes(gameSync.localPlayerId) && !isOnlyBotsMode;
           if (humanNeedsDiscard) {
-              const totalRes = Object.values(this.players[0].resources).reduce((a,b) => a+b, 0);
+              const totalRes = Object.values(this.players[gameSync.localPlayerId].resources).reduce((a,b) => a+b, 0);
               if (typeof setupDiscardUI === 'function') setupDiscardUI(Math.floor(totalRes / 2));
           }
       } else {
@@ -966,6 +1022,7 @@ class GameState {
     
     this.log(`${p.name} discarded ${count} cards.`);
     this.confirmDiscard(playerId);
+    if (gameSync.isMultiplayer && gameSync.isHost) gameSync.update(this, true);
   }
 
   confirmDiscard(playerId) {
@@ -1059,6 +1116,7 @@ class GameState {
 
     if (victims.length === 0) {
       this.log("No valid players to rob.");
+      if (gameSync.isMultiplayer) gameSync.update(this, true);
       return;
     }
 
@@ -1069,6 +1127,7 @@ class GameState {
       } else {
         this.waitingToPickVictim = true;
         if (typeof setupRobberUI === 'function') setupRobberUI(victims);
+        if (gameSync.isMultiplayer) gameSync.update(this, true); // Sync that we are waiting
       }
     } else {
       // AI picks player with most resources
@@ -1084,12 +1143,16 @@ class GameState {
   robPlayer(target) {
     this.waitingToPickVictim = false;
     const resTypes = Object.keys(target.resources).filter(k => target.resources[k] > 0);
-    if (resTypes.length === 0) return;
+    if (resTypes.length === 0) {
+      if (gameSync.isMultiplayer) gameSync.update(this, true);
+      return;
+    }
 
     const r = resTypes[Math.floor(Math.random() * resTypes.length)];
     target.resources[r]--;
     this.currentPlayer.resources[r]++;
     this.log(`${this.currentPlayer.name} stole 1 ${r} from ${target.name}`);
+    if (gameSync.isMultiplayer) gameSync.update(this, true);
   }
 
   getTradeRate(player, res) {
@@ -1461,7 +1524,7 @@ class CanvasRenderer {
     }
 
     this.ctx.clearRect(0,0,this.canvas.width,this.canvas.height);
-    const isHumanTurn = !gs.currentPlayer.isBot;
+    const isHumanTurn = gs.currentPlayerIdx === gameSync.localPlayerId && !gs.currentPlayer.isBot;
     
     this.ctx.save();
     // Centralize and apply pan/zoom
@@ -1714,7 +1777,7 @@ class CanvasRenderer {
     }
 
     let ly = isMobile ? 65 : 70;
-    const human = gs.players[0];
+    const human = gs.players[gameSync.localPlayerId];
     const humanTotal = Object.values(human.resources).reduce((a, b) => a + b, 0);
     
     this.ctx.fillStyle = humanTotal > 7 ? '#ff4444' : '#fff'; // Red if at risk
@@ -1797,7 +1860,7 @@ class CanvasRenderer {
       
       let vpText = `${p.visibleVP}`;
       const vpCardsCount = p.devCards.filter(c => c.type === 'VP').length;
-      if (vpCardsCount > 0 && (p.id === 0 || gs.winner)) {
+      if (vpCardsCount > 0 && (p.id === gameSync.localPlayerId || gs.winner)) {
         vpText += ` (${p.visibleVP + vpCardsCount})`;
       }
       this.ctx.fillText(vpText, rx + (isMobile ? 100 : 120), py);
@@ -2012,6 +2075,11 @@ class InputHandler {
 
   async click() {
     if(!this.gs || this.gs.currentPlayer.isBot || !this.hover) return;
+
+    // AUTHORITY CHECK: Only the player whose turn it is can click to build/move
+    if (this.gs.currentPlayerIdx !== gameSync.localPlayerId) {
+        return; 
+    }
     
     // Block interaction if any modal is active
     if (this.isAnyModalVisible()) return;
@@ -2029,7 +2097,7 @@ class InputHandler {
                 const affected = h.vertices.some(vk => {
                     const v = this.board.getVertex(vk);
                     // Friendly Robber: Cannot place on hex affecting ANY other player with <= 2 points
-                    return v.ownerId !== null && v.ownerId !== 0 && this.gs.players[v.ownerId].victoryPoints <= 2;
+                    return v.ownerId !== null && v.ownerId !== gameSync.localPlayerId && this.gs.players[v.ownerId].victoryPoints <= 2;
                 });
                 if(affected) { 
                     this.gs.log('Friendly Robber: Cannot target players with <= 2 points.'); 
@@ -2042,9 +2110,9 @@ class InputHandler {
     } else if (this.gs.pendingRoads > 0) {
         if (this.hover.type === 'edge') {
             const e = this.board.getEdge(this.hover.id);
-            if (e.ownerId === null && Rules.canPlaceRoad(this.board, this.hover.id, this.gs.players[0])) {
-                e.ownerId = 0; 
-                this.gs.players[0].roads.push(this.hover.id);
+            if (e.ownerId === null && Rules.canPlaceRoad(this.board, this.hover.id, this.gs.players[gameSync.localPlayerId])) {
+                e.ownerId = gameSync.localPlayerId; 
+                this.gs.players[gameSync.localPlayerId].roads.push(this.hover.id);
                 this.gs.updateLongestRoad();
                 this.gs.pendingRoads--;
                 this.gs.log(`Placed free road! ${this.gs.pendingRoads} remaining.`);
@@ -2142,7 +2210,7 @@ let isTradingWithBank = false;
 
 function setupDiscardUI(totalToDiscard) {
     if (!gs) return;
-    const p = gs.players[0];
+    const p = gs.players[gameSync.localPlayerId];
     const resources = ['WOOD', 'BRICK', 'SHEEP', 'WHEAT', 'ORE'];
     Object.keys(discardSelection).forEach(r => discardSelection[r] = 0);
     
@@ -2198,7 +2266,7 @@ function setupDiscardUI(totalToDiscard) {
     confirmDiscardBtn.onclick = async () => {
         gs.returnResources(p, discardSelection);
         gs.log(`You discarded ${totalToDiscard} cards.`);
-        gs.confirmDiscard(0);
+        gs.confirmDiscard(gameSync.localPlayerId);
         if(gameSync.isMultiplayer) await gameSync.update(gs);
     };
 
@@ -2287,7 +2355,7 @@ function setupTradeUI() {
 }
 
 function setupDevCardUI() {
-    if (!gs || gs.currentPlayerIdx !== 0) {
+    if (!gs || gs.currentPlayerIdx !== gameSync.localPlayerId) {
         devCardContainer.style.display = 'none';
         return;
     }
@@ -2490,7 +2558,7 @@ const robberPanel = document.getElementById('robber-panel');
 const robberVictims = document.getElementById('robber-victims');
 
 function setupRobberUI(victims) {
-    if (!gs || gs.currentPlayerIdx !== 0) return;
+    if (!gs || gs.currentPlayerIdx !== gameSync.localPlayerId) return;
     robberVictims.innerHTML = '';
     
     victims.forEach(v => {
@@ -2532,7 +2600,38 @@ class GameSync {
         this.pendingUpdate = null;
     }
 
+    saveSession() {
+        if (!this.matchId) return;
+        const myName = document.getElementById('playerName').value.trim();
+        // Session storage is tab-specific, allowing multi-local testing
+        sessionStorage.setItem('hexbound_session', JSON.stringify({
+            matchId: this.matchId,
+            playerName: myName,
+            isHost: this.isHost,
+            localPlayerId: this.localPlayerId
+        }));
+    }
+
+    getSession() {
+        const s = sessionStorage.getItem('hexbound_session');
+        if (!s) return null;
+        try { return JSON.parse(s); } catch(e) { return null; }
+    }
+
+    clearSession() {
+        sessionStorage.removeItem('hexbound_session');
+    }
+
     async init() {
+        // Load saved player name ONLY if current input is still default/empty
+        const savedName = localStorage.getItem('hexbound_playername');
+        const currentInput = document.getElementById('playerName').value.trim();
+        if (savedName && (currentInput === "" || currentInput === "Human")) {
+            document.getElementById('playerName').value = savedName;
+        }
+
+        if (this.db) return true; // Already initialized
+
         try {
             // First check for global object (loaded via script to avoid file:// CORS issues)
             let config = window.hexboundFirebaseConfig;
@@ -2561,44 +2660,101 @@ class GameSync {
         this.matchId = id;
         this.gameRef = this.db.collection('matches').doc(id);
         this.isMultiplayer = true;
+        let myName = document.getElementById('playerName').value.trim() || "Guest";
+        localStorage.setItem('hexbound_playername', myName);
         
         try {
-            const doc = await this.gameRef.get();
-            if (!doc.exists) {
-                this.isHost = true;
-                document.getElementById('syncStatus').innerText = `Host: Match ${id}`;
-                document.getElementById('syncStatus').style.color = '#2ecc71';
+            await this.db.runTransaction(async (transaction) => {
+                const doc = await transaction.get(this.gameRef);
+                const session = this.getSession();
+                
+                if (!doc.exists) {
+                    this.isHost = true;
+                    this.localPlayerId = 0;
+                    
+                    const colors = ['#0099ff', '#ff4444', '#ffcc00', '#ffffff', '#e67e22', '#9b59b6'];
+                    const p0 = new Player(0, myName, colors[0], false);
+                    const initialBoard = new Board(2);
+                    const initialGs = new GameState(initialBoard, [p0], 10);
+                    transaction.set(this.gameRef, initialGs.toJSON());
+                } else {
+                    const data = doc.data();
+                    const tempGs = GameState.fromJSON(data);
+
+                    if (session && session.matchId === id) {
+                        this.isHost = session.isHost;
+                        this.localPlayerId = session.localPlayerId;
+                    } else {
+                        this.isHost = false;
+                        
+                        // Handle name collision
+                        const nameExists = tempGs.players.some(p => p.name === myName && !p.isBot);
+                        if (nameExists) {
+                            let count = 2;
+                            let baseName = myName;
+                            while (tempGs.players.some(p => p.name === `${baseName} (${count})`)) count++;
+                            myName = `${baseName} (${count})`;
+                            document.getElementById('playerName').value = myName;
+                            localStorage.setItem('hexbound_playername', myName);
+                        }
+
+                        let idx = tempGs.players.findIndex(p => p.name === myName);
+                        if (idx === -1) {
+                            idx = tempGs.players.findIndex(p => p.isBot);
+                            if (idx !== -1) {
+                                tempGs.players[idx].name = myName;
+                                tempGs.players[idx].isBot = false;
+                            } else if (tempGs.players.length < 6) {
+                                idx = tempGs.players.length;
+                                const colors = ['#0099ff', '#ff4444', '#ffcc00', '#ffffff', '#e67e22', '#9b59b6'];
+                                tempGs.players.push(new Player(idx, myName, colors[idx % colors.length], false));
+                            } else {
+                                throw new Error("Game is full!");
+                            }
+                        }
+                        this.localPlayerId = idx;
+                        transaction.update(this.gameRef, { players: tempGs.players.map(p => p.toJSON()) });
+                    }
+                }
+            });
+
+            this.saveSession();
+            document.getElementById('syncStatus').innerText = `${this.isHost ? 'Host' : 'Joined'}: Match ${id}`;
+            document.getElementById('syncStatus').style.color = this.isHost ? '#2ecc71' : '#3498db';
+            
+            const abandonBtn = document.getElementById('abandonBtn');
+            abandonBtn.style.display = 'block';
+            abandonBtn.innerText = this.isHost ? "Abandon Game" : "Leave Game";
+
+            if (!this.isHost) {
+                startGameBtn.style.display = 'none';
+                document.getElementById('menu-overlay').querySelector('h1').innerText = "Waiting for Host...";
             } else {
-                this.isHost = false;
-                document.getElementById('syncStatus').innerText = `Joined: Match ${id}`;
-                document.getElementById('syncStatus').style.color = '#3498db';
-                // Trigger initial state load
-                const data = doc.data();
-                if (data) onUpdate(GameState.fromJSON(data));
+                startGameBtn.style.display = 'block';
+                document.getElementById('menu-overlay').querySelector('h1').innerText = "Match Lobby";
             }
+
+            const finalDoc = await this.gameRef.get();
+            if (finalDoc.exists) onUpdate(GameState.fromJSON(finalDoc.data()));
+
         } catch (e) {
-            console.error("Permissions error: check your Firestore rules!", e);
-            alert("Permissions Error: Ensure your Firestore rules are set to Test Mode or allow reads/writes to 'matches' collection.");
+            console.error("Join Failed:", e);
+            alert(e.message || "Failed to join match.");
             throw e;
         }
 
-        // Setup real-time listener
         if (this.unsubscribe) this.unsubscribe();
         this.unsubscribe = this.gameRef.onSnapshot((snap) => {
             if (snap.exists) {
                 const data = snap.data();
-                // Avoid re-applying what we just pushed
                 if (this.lastPushedJson && JSON.stringify(data) === this.lastPushedJson) return;
-                
                 onUpdate(GameState.fromJSON(data));
             } else if (this.isMultiplayer && !this.isHost && gs) {
-                // If the game disappeared and we aren't the one who closed it
+                this.abandonMatch(true); 
                 alert("The host has abandoned the game.");
-                this.abandonMatch();
                 gs = null;
                 gameInterface.style.display = 'none';
                 menuOverlay.style.display = 'flex';
-                // Reset sync UI
                 const syncBtn = document.getElementById('joinMatchBtn');
                 syncBtn.innerText = "SYNC";
                 syncBtn.disabled = false;
@@ -2645,21 +2801,33 @@ class GameSync {
         }
     }
 
-    async abandonMatch() {
+    async abandonMatch(skipSync = false) {
         if (this.updateTimeout) {
             clearTimeout(this.updateTimeout);
             this.updateTimeout = null;
         }
         this.pendingUpdate = null;
+        this.clearSession();
         if (!this.gameRef) return;
+        
         if (this.isHost) {
             try {
+                // If it's a "clean" abandon by host, delete the match entirely
                 await this.gameRef.delete();
                 console.log("Match deleted from Firebase (Host abandoned)");
             } catch (e) {
                 console.error("Failed to delete match:", e);
             }
+        } else if (gs && !skipSync) {
+            // Revert ourselves to a bot before leaving, ONLY if we aren't being forced out by a deletion
+            const me = gs.players[this.localPlayerId];
+            const oldName = me.name;
+            me.isBot = true;
+            me.name = `AI ${this.localPlayerId}`;
+            gs.log(`${oldName} left. Replaced by AI.`);
+            await this.update(gs, true);
         }
+
         if (this.unsubscribe) this.unsubscribe();
         this.matchId = null;
         this.gameRef = null;
@@ -2676,24 +2844,45 @@ function resetGame(config) {
   lastGameConfig = config;
   isOnlyBotsMode = config.onlyBots;
   const { aiCount, boardRadius, winPoints, friendlyRobber, aiDifficulty, onlyBots } = config;
+  const myName = document.getElementById('playerName').value.trim() || "Human";
+  localStorage.setItem('hexbound_playername', myName);
+  
+  gameSync.saveSession();
 
   // Update rule text
   document.getElementById('ruleWinPoints').innerHTML = `<strong>Victory:</strong> Reach ${winPoints} points.`;
 
   board = new Board(boardRadius);
   const colors = ['#0099ff', '#ff4444', '#ffcc00', '#ffffff', '#e67e22', '#9b59b6'];
-  players = [];
+  let players = [];
   
   if (onlyBots) {
     for (let i = 0; i <= aiCount; i++) {
         players.push(new Player(i, `Bot ${i}`, colors[i % colors.length], true));
     }
   } else {
-    players.push(new Player(0, 'Human', colors[0], false));
+    // Preserve existing human players in lobby
+    let humanPlayers = (gs && gs.players) ? gs.players.filter(p => !p.isBot) : [];
+    
+    if (humanPlayers.length === 0) {
+        players.push(new Player(0, myName, colors[0], false));
+    } else {
+        players = [...humanPlayers];
+        // Ensure our name matches what's in the input
+        if (players[gameSync.localPlayerId]) {
+            players[gameSync.localPlayerId].name = myName;
+        }
+    }
+
+    // Append AI bots up to aiCount
     for (let i = 0; i < aiCount; i++) {
-        players.push(new Player(i + 1, `AI ${i + 1}`, colors[(i + 1) % colors.length], true));
+        const nextIdx = players.length;
+        players.push(new Player(nextIdx, `AI ${nextIdx}`, colors[nextIdx % colors.length], true));
     }
   }
+
+  // Final sanitization of IDs to match indices
+  players.forEach((p, idx) => p.id = idx);
 
   gs = new GameState(board, players, winPoints, friendlyRobber, aiDifficulty);
   ren = new CanvasRenderer(canvas, board);
@@ -2721,14 +2910,24 @@ startGameBtn.onclick = async () => {
     aiDifficulty: document.getElementById('aiDifficulty').value,
     onlyBots: document.getElementById('onlyBots').checked
   };
+
+  // Warning for 0 AIs if not synced
+  if (config.aiCount === 0 && !gameSync.matchId) {
+      alert("0 AI mode is for multiplayer testing only. To play solo, please add at least 1 AI opponent.");
+      return;
+  }
   
   // If we aren't already synced, this is a local solo-only game
   if (!gameSync.matchId) {
     gameSync.isMultiplayer = false; 
     gameSync.isHost = true;
   } else {
+      // We are already synced, maintain our host status
+      if (!gameSync.isHost) {
+          alert("Only the host can start the game.");
+          return;
+      }
       gameSync.isMultiplayer = true;
-      gameSync.isHost = true; // Whoever clicks Start is the one driving the initial setup
   }
 
   resetGame(config);
@@ -2773,10 +2972,14 @@ document.getElementById('joinMatchBtn').onclick = async () => {
       // We'll check if the snapshot was empty or if we need to push a new one
       // For simplicity, if we clicked SYNC and its still the menu, we'll start a default game and push it
       if (menuOverlay.style.display !== 'none' && gameSync.isHost) {
+          const aiCountStr = document.getElementById('aiCount').value;
+          const boardSizeStr = document.getElementById('boardSize').value;
+          const winPointsStr = document.getElementById('winPoints').value;
+          
           const config = {
-              aiCount: parseInt(document.getElementById('aiCount').value) || 1,
-              boardRadius: parseInt(document.getElementById('boardSize').value) || 3,
-              winPoints: parseInt(document.getElementById('winPoints').value) || 10,
+              aiCount: (aiCountStr !== "") ? parseInt(aiCountStr) : 1,
+              boardRadius: (boardSizeStr !== "") ? parseInt(boardSizeStr) : 3,
+              winPoints: (winPointsStr !== "") ? parseInt(winPointsStr) : 10,
               friendlyRobber: document.getElementById('friendlyRobber').checked,
               aiDifficulty: document.getElementById('aiDifficulty').value,
               onlyBots: false
@@ -2837,6 +3040,45 @@ endBtn.onclick = async () => {
 };
 document.getElementById('resetCamBtn').onclick = () => { if(ren) { ren.camera = { x: 0, y: 0, zoom: 1.0 }; } };
 
+// Handle accidental disconnects for guests
+window.addEventListener('beforeunload', (e) => {
+    if (gameSync.isMultiplayer && gs) {
+        // If host, this will (attempt to) delete the match. If guest, it reverts them to a bot.
+        // Even if the async call doesn't finish, we rely on the next load's detection to clean up.
+        gameSync.abandonMatch();
+    }
+});
+
+// Auto-Sync on Page Load
+(async function checkStoredSession() {
+    const session = JSON.parse(sessionStorage.getItem('hexbound_session'));
+    if (!session) return;
+    
+    // If the player was the host, we'll follow the rule to "abandon" (cancel the saved session and go to menu)
+    // This wipes the match-to-be-abandoned or lets the host start over cleanly.
+    if (session.isHost) {
+        console.log("Host refresh detected. Cleaning up...");
+        const ok = await gameSync.init();
+        if (ok) {
+            gameSync.matchId = session.matchId;
+            gameSync.gameRef = gameSync.db.collection('matches').doc(session.matchId);
+            gameSync.isHost = true;
+            await gameSync.abandonMatch(); // Deletes match from DB and clears local storage
+            console.log("Legacy host match deleted.");
+        }
+        return;
+    }
+
+    // If the player was a guest, we attempt to auto-rejoin
+    const ok = await gameSync.init();
+    if (!ok) return;
+
+    // Simulate clicking the SYNC button
+    document.getElementById('matchId').value = session.matchId;
+    document.getElementById('playerName').value = session.playerName;
+    document.getElementById('joinMatchBtn').onclick();
+})();
+
 function loop() {
   requestAnimationFrame(loop);
   if (!gs) {
@@ -2846,7 +3088,7 @@ function loop() {
   }
   ren.render(gs, inp.hover);
 
-  const isHumanTurn = !gs.currentPlayer.isBot;
+  const isHumanTurn = gs.currentPlayerIdx === gameSync.localPlayerId && !gs.currentPlayer.isBot;
   const inRobberActions = gs.movingRobber || gs.waitingToPickVictim;
   const inDiscardActions = gs.waitingForDiscards.length > 0;
   const isWinning = gs.winner !== null;
@@ -2864,7 +3106,7 @@ function loop() {
   tradePanel.style.display = (gs.phase === 'PLAY' && isHumanTurn && !inRobberActions && !inDiscardActions && isTradingWithBank && !isWinning) ? 'flex' : 'none';
   playerTradePanel.style.display = (gs.phase === 'PLAY' && isHumanTurn && !inRobberActions && !inDiscardActions && isProposingTrade && !isWinning) ? 'flex' : 'none';
   robberPanel.style.display = (gs.phase === 'PLAY' && isHumanTurn && gs.waitingToPickVictim && !isWinning) ? 'flex' : 'none';
-  const humanInDiscard = gs.waitingForDiscards.includes(0) && !isOnlyBotsMode;
+  const humanInDiscard = gs.waitingForDiscards.includes(gameSync.localPlayerId) && !isOnlyBotsMode;
   discardPanel.style.display = (humanInDiscard && !isWinning) ? 'flex' : 'none';
   
   if (isWinning) {
@@ -2876,8 +3118,8 @@ function loop() {
 
   // Handle Player Trade Panel visibility
   if (gs.activeTrade && !isWinning) {
-      const isTargetHuman = !gs.players[gs.activeTrade.targetId].isBot;
-      if (isTargetHuman && !inDiscardActions) {
+      const isTargetLocalHuman = gs.activeTrade.targetId === gameSync.localPlayerId;
+      if (isTargetLocalHuman && !inDiscardActions) {
           tradeOfferPanel.style.display = 'flex';
           document.getElementById('trade-offer-player').innerText = `${gs.players[gs.activeTrade.senderId].name} wants to trade!`;
           const giveStr = Object.entries(gs.activeTrade.give).map(([r, a]) => `${a} ${r}`).join(', ');
