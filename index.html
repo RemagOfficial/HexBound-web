@@ -23,7 +23,7 @@
             height: 100vh;
         }
 
-        canvas {
+        #gameCanvas {
             display: block;
             background-color: #34495e;
             cursor: pointer;
@@ -319,6 +319,14 @@
                 </select>
             </div>
             <div class="option-group">
+                <label>Online Multiplayer (Match ID)</label>
+                <div style="display:flex; gap:10px;">
+                    <input type="text" id="matchId" placeholder="Match ID (e.g. my-room)" style="flex:1;">
+                    <button id="joinMatchBtn" style="padding:5px 10px; font-size:12px; background:#3498db;">Sync</button>
+                </div>
+                <small id="syncStatus" style="color:#aaa; display:block; margin-top:5px;">Not synced.</small>
+            </div>
+            <div class="option-group">
                 <label>Board Size</label>
                 <select id="boardSize">
                     <option value="1">Small (7 Hexes)</option>
@@ -431,16 +439,17 @@
 
         <div id="game-container">
             <canvas id="gameCanvas"></canvas>
-            <div id="dice-display" style="position: absolute; bottom: 130px; left: 50%; transform: translateX(-50%); display: flex; gap: 20px; pointer-events: none; z-index: 1700;">
-                <canvas id="diceCanvas" width="200" height="100"></canvas>
-            </div>
             <div id="controls">
+                <div id="dice-display" style="position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); margin-bottom: 10px; display: flex; gap: 20px; pointer-events: none; z-index: 1700;">
+                    <canvas id="diceCanvas" width="200" height="100"></canvas>
+                </div>
                 <div class="main-btns">
                     <button id="rollBtn" disabled>Roll Dice</button>
                     <button id="bankTradeBtn" disabled style="background: #f1c40f; color: #000;">Bank Trade</button>
                     <button id="tradeBtn" disabled style="background: #e67e22;">Trade Player</button>
                     <button id="buyDevBtn" disabled style="background: #9b59b6;">Buy Dev Card</button>
                     <button id="endBtn" disabled>End Turn</button>
+                    <button id="abandonBtn" style="background: #e74c3c; display: none; font-size: 11px;">Abandon Game</button>
                     <button id="resetCamBtn" style="background: #7f8c8d; font-size: 11px;">Reset View</button>
                 </div>
                 <div id="dev-card-container" style="display:flex; gap:5px; margin-top:5px; flex-wrap:wrap; justify-content:center;"></div>
@@ -479,6 +488,9 @@
             </div>
         </div>
     </div>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+    <script src="firebase-config.js"></script>
     <script src="main.js"></script>
 </body>
 </html>
