@@ -1,4 +1,4 @@
-# HexBound - Hex-Grid Strategy Simulation
+# [HexBound - Hex-Grid Strategy Simulation](https://remagofficial.github.io/HexBound-web/)
 
 HexBound is a browser-based, high-performance strategy game and simulation engine inspired by classic hex-grid board games. Built using vanilla JavaScript and HTML5 Canvas, it features a robust AI system, dynamic board generation, and a fully automated "Only Bots" mode for theoretical game analysis.
 
