@@ -35,7 +35,6 @@ HexBound supports **Real-Time Multiplayer** across different browsers using Goog
 *   **Abandon Game**: If the Host abandons, the match is deleted from the server and all guests are returned to the menu. 
 
 ### 2. Synchronization Architecture
-*   **Authority Model**: To prevent desync, all **AI logic** and **Dice rolls** are calculated on the Host's machine and pushed to the Guest.
 *   **Efficiency**: The engine uses a **1.5s Debounce** for non-critical writes (like building roads). This groups multiple moves into a single database write to stay within Firestore free-tier limits.
 *   **Immediate Sync**: Critical actions like **Roll Dice** and **End Turn** are pushed instantly to ensure a smooth turn-based transition.
 
