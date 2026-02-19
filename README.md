@@ -9,9 +9,10 @@ HexBound is a browser-based, high-performance strategy game and simulation engin
     *   **Singleplayer**: Quick-start a local match against AIs.
     *   **Multiplayer**: Host or join a real-time online match.
 3.  Configure your session in the **Setup Menu**:
-    *   **AI Opponents**: Play with up to 5 AI players (6 players total).
-    *   **Board Size**: Small (7 hexes), Standard (19 hexes), or Large (37 hexes).
+    *   **AI Opponents**: Play with up to 37 AI players (38 players total).
+    *   **Board Size**: Small (7 hexes), Standard (19 hexes), Large (37 hexes), Extra Large (61 hexes), Colossal (91 hexes), or **Hell (1141 hexes)**.
     *   **AI Difficulty**: Choose from **Beginner** (Slow/Random), **Skilled** (Balanced), or **Master** (Aggressive/Strategic).
+    *   **Multi-Robber Mode**: Enable this to start every desert with a robber. Requires a two-phase selection (Pick Robber -> Pick Destination).
     *   **Only Bots Mode (Auto-Battle)**: Toggle this to watch a fully automated simulation.
     *   **Friendly Robber (Safe at 2 pts)**: Protect new players from being robbed early.
 4.  Click **Start Game** to begin the match.
@@ -19,7 +20,7 @@ HexBound is a browser-based, high-performance strategy game and simulation engin
 ## 🎮 Controls
 
 *   **🖱️ Pan**: Click and drag (Desktop) or **One-Finger Drag** (Mobile) to move the board.
-*   **🔍 Zoom**: Use the **Mouse Wheel** (Desktop) or **Pinch-to-Zoom** (Mobile) to scale the board.
+*   **🔍 Zoom**: Use the **Mouse Wheel** (Desktop) or **Pinch-to-Zoom** (Mobile) to scale the board. Supports extreme wide-angle viewing (**0.05x**) for massive maps.
 *   **🛠️ Build**: Click **Vertices** to build Settlements/Cities and **Edges** to build Roads. Valid locations pulse with cyan/gold highlights after your roll.
 *   **🎲 Actions**: Use the control bar to **Roll Dice**, **End Turn**, or perform **Trades**.
 *   **✨ Dice Visuals**: Experience a high-polish dice system with a centralized animation that follows a **Roll, Grow, Pause, and Fade** sequence for maximum clarity.
@@ -58,12 +59,16 @@ HexBound supports **Real-Time Multiplayer** across different browsers using Goog
 *   **Player Trade**: Propose custom trades to AI or Human opponents. 
 *   **Multiplayer Trading**: Proposing a trade to a human player in a synced match triggers a real-time modal on their screen with a countdown timer.
 
-### 3. Expansion Mechanics (5-6 Players)
-*   **Dynamic Scaling**: The deck size and bank resources automatically scale when 5 or 6 players are in the session (Large Board only).
+### 3. Expansion Mechanics (5-38 Players)
+*   **Dynamic Scaling**: The deck size and bank resources automatically scale to support up to 38 players.
+    *   **Bank Resources**: Up to 200 per type for "Hell" games.
+    *   **Dev Deck**: Up to 100+ Knight cards to manage dozens of active robbers.
+*   **Hell Mode (Radius 19)**: A massive 1,141-hex battlefield designed for target scores up to 100 VP. Includes ultra-wide camera support (**0.05x zoom**) to maintain perspective. *Note: Playing with the full 38 players is a chaotic endurance test and may take several real-world days to conclude.*
+*   **Multi-Robbers**: Every desert starts with a robber. Players must first select which robber to move, then choose its destination.
 *   **Development Cards**: 
-    *   **Knight**: Move the Robber and steal from an adjacent player.
+    *   **Knight**: Move one of the many Robbers and steal from an adjacent player.
     *   **Progress Cards**: Road Building (2 free roads), Year of Plenty/Invention (2 resources), and Monopoly (Take all resources of one type from others).
-    *   **Victory Points**: Hidden +1 VP cards.
+    *   **Victory Points**: Hidden +1 VP cards. Increase to 20+ cards on giant maps.
 
 ### 4. The Robber & Manual Discarding
 *   **Rolling a 7**: Pauses the game for a special phase:

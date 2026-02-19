@@ -14,6 +14,8 @@ const HEX_TYPES = {
   WATER: { name: 'Water', color: '#2980b9' }
 };
 
+const PLAYER_COLORS = ['#0099ff', '#ff4444', '#ffcc00', '#ffffff', '#e67e22', '#9b59b6', '#2ecc71', '#e91e63', '#1abc9c', '#800000', '#ff00ff', '#00ffff', '#990000', '#006600', '#000099', '#666666', '#ff80ed', '#fa8072', '#00ff00', '#ff0000', '#0000ff', '#b0e0e6', '#da70d6', '#ffa500', '#4b0082', '#808000', '#008080', '#ffdab9', '#c0c0c0', '#40e0d0', '#800080', '#00bfff', '#7cfc00', '#ff1493', '#ffd700', '#8b4513', '#556b2f', '#00ced1'];
+
 const COSTS = {
   ROAD: { WOOD: 1, BRICK: 1 },
   SETTLEMENT: { WOOD: 1, BRICK: 1, SHEEP: 1, WHEAT: 1 },
@@ -103,35 +105,73 @@ class Board {
   }
 
   generateBoard() {
-    const totalHexes = 3 * this.radius * (this.radius + 1) + 1;
-    const terrainTypes = Object.values(HEX_TYPES).filter(t => t.name !== 'Water');
-    
-    // Create broad pool evenly then fill up to totalHexes
+    this.hexes.clear();
+    const allKeys = [];
+    for (let q = -this.radius; q <= this.radius; q++) {
+      for (let r = Math.max(-this.radius, -q - this.radius); r <= Math.min(this.radius, -q + this.radius); r++) {
+        allKeys.push(`${q},${r}`);
+      }
+    }
+
+    // 1. Determine Desert Count based on board size (Radius)
+    let numDeserts = 1;
+    if (this.radius === 3) numDeserts = 2; // Large
+    else if (this.radius === 4) numDeserts = 3; // XL
+    else if (this.radius === 5) numDeserts = 5; // Colossal
+    else if (this.radius >= 19) numDeserts = 40; // Hell
+    else if (this.radius >= 6) numDeserts = 10; // Mega (if ever added)
+
+    // 2. Place Deserts sparsely (not adjacent if possible)
+    const desertKeys = [];
+    const shuffledKeys = [...allKeys].sort(() => Math.random() - 0.5);
+    for (const key of shuffledKeys) {
+        if (desertKeys.length >= numDeserts) break;
+        const [q, r] = key.split(',').map(Number);
+        const neighbors = [
+            `${q+1},${r}`, `${q-1},${r}`, `${q},${r+1}`, 
+            `${q},${r-1}`, `${q+1},${r-1}`, `${q-1},${r+1}`
+        ];
+        // Ensure no neighbor is already a desert
+        if (!neighbors.some(nk => desertKeys.includes(nk))) {
+            desertKeys.push(key);
+        }
+    }
+    // Fallback: If map is too small for sparse deserts (unlikely for our sizes), just take first randoms
+    if (desertKeys.length < numDeserts) {
+        for (const key of shuffledKeys) {
+            if (desertKeys.length >= numDeserts) break;
+            if (!desertKeys.includes(key)) desertKeys.push(key);
+        }
+    }
+
+    // 3. Prepare Terrain and Number pools for other hexes
+    const nonDesertKeys = allKeys.filter(k => !desertKeys.includes(k));
+    const terrainTypes = Object.values(HEX_TYPES).filter(t => t.name !== 'Water' && t.name !== 'Desert');
     let terrainPool = [];
-    for (let i = 0; i < totalHexes; i++) {
-        // Desert is last in types, but let's just use it sparingly
-        if (i === 0) terrainPool.push(HEX_TYPES.DESERT);
-        else terrainPool.push(terrainTypes[(i % (terrainTypes.length - 1))]);
+    for (let i = 0; i < nonDesertKeys.length; i++) {
+        terrainPool.push(terrainTypes[i % terrainTypes.length]);
     }
     terrainPool.sort(() => Math.random() - 0.5);
 
-    // Number pool (skipping 7 for robber mechanism if implemented)
     const possibleNums = [2, 3, 3, 4, 4, 5, 5, 6, 6, 8, 8, 9, 9, 10, 10, 11, 11, 12];
     let numberPool = [];
-    for (let i = 0; i < totalHexes - 1; i++) {
+    for (let i = 0; i < nonDesertKeys.length; i++) {
         numberPool.push(possibleNums[i % possibleNums.length]);
     }
     numberPool.sort(() => Math.random() - 0.5);
 
-    let nIdx = 0, tIdx = 0;
-    for (let q = -this.radius; q <= this.radius; q++) {
-      for (let r = Math.max(-this.radius, -q - this.radius); r <= Math.min(this.radius, -q + this.radius); r++) {
-        const terrain = terrainPool[tIdx++];
-        const number = (terrain === HEX_TYPES.DESERT) ? null : numberPool[nIdx++];
-        this.hexes.set(`${q},${r}`, { q, r, terrain, number, vertices: [], edges: [] });
-      }
-    }
+    // 4. Assign Hexes
+    let tIdx = 0, nIdx = 0;
+    allKeys.forEach(key => {
+        const [q, r] = key.split(',').map(Number);
+        if (desertKeys.includes(key)) {
+            this.hexes.set(key, { q, r, terrain: HEX_TYPES.DESERT, number: null, vertices: [], edges: [] });
+        } else {
+            this.hexes.set(key, { q, r, terrain: terrainPool[tIdx++], number: numberPool[nIdx++], vertices: [], edges: [] });
+        }
+    });
 
+    // 5. Build Vertices and Edges
     this.hexes.forEach(hex => {
       const hexVertices = this.getHexVertexPositions(hex.q, hex.r);
       const hexVKeys = [];
@@ -288,17 +328,26 @@ class Rules {
 
 // --- LOGIC: GAMESTATE ---
 class GameState {
-  constructor(board, players, targetScore = 10, friendlyRobber = false, aiDifficulty = 'Normal') {
+  constructor(board, players, targetScore = 10, friendlyRobber = false, aiDifficulty = 'Normal', multiRobber = false) {
     this.board = board; this.players = players; this.currentPlayerIdx = 0;
     this.targetScore = targetScore; this.friendlyRobber = friendlyRobber;
     this.aiDifficulty = aiDifficulty;
+    this.multiRobber = multiRobber;
     this.phase = 'INITIAL'; this.dice = [1, 1]; this.history = [];
     this.initialPlacements = 0; this.winner = null; this.hasRolled = false;
     this.pendingSettlement = null; this.movingRobber = false;
+    this.selectedRobberIdx = null; // Used for multi-robber phase
     this.waitingToPickVictim = false;
     this.longestRoadHolderId = null;
     this.longestRoadLength = 4; 
-    this.robberHexId = Array.from(board.hexes.keys()).find(k => board.hexes.get(k).terrain === HEX_TYPES.DESERT);
+    
+    const desertHexes = Array.from(board.hexes.keys()).filter(k => board.hexes.get(k).terrain === HEX_TYPES.DESERT);
+    if (this.multiRobber) {
+        this.robberHexIds = [...desertHexes];
+    } else {
+        this.robberHexIds = [desertHexes[Math.floor(Math.random() * desertHexes.length)]];
+    }
+    
     this.diceAnim = { value: [1, 1], timer: 0 };
     this.activeTrade = null;
     this.tradeTimer = null;
@@ -310,15 +359,25 @@ class GameState {
     this.started = false;
     
     // Bank Resources initialization
-    const resCount = (this.players.length > 4) ? 24 : 19;
+    // Standard (4p): 19, Large (6p): 24, XL (8p): 30, Colossal (10p): 36, Hell: 200
+    let resCount = 19;
+    if (this.board.radius >= 19) resCount = 200;
+    else if (this.players.length > 8) resCount = 36;
+    else if (this.players.length > 6) resCount = 30;
+    else if (this.players.length > 4) resCount = 24;
     this.bankResources = { WOOD: resCount, BRICK: resCount, SHEEP: resCount, WHEAT: resCount, ORE: resCount };
 
     // Development Cards Deck
     this.devCardDeck = [];
-    const isLargeGame = this.players.length > 4;
-    const knightCount = isLargeGame ? 20 : 14;
-    const progressCount = isLargeGame ? 3 : 2;
-    const vpCount = 5;
+    const pCount = this.players.length;
+    let knightCount = 14;
+    let progressCount = 2;
+    let vpCount = 5;
+
+    if (this.board.radius >= 19) { knightCount = 100; progressCount = 15; vpCount = 20; }
+    else if (pCount > 8) { knightCount = 32; progressCount = 5; }
+    else if (pCount > 6) { knightCount = 26; progressCount = 4; }
+    else if (pCount > 4) { knightCount = 20; progressCount = 3; }
 
     for (let i = 0; i < knightCount; i++) this.devCardDeck.push({ type: 'KNIGHT', ...DEV_CARD_TYPES.KNIGHT });
     for (let i = 0; i < progressCount; i++) {
@@ -348,7 +407,9 @@ class GameState {
       turnToken: (this.turnToken === undefined) ? 0 : this.turnToken,
       hasRolled: !!this.hasRolled,
       dice: this.dice || [1, 1],
-      robberHexId: (this.robberHexId === undefined) ? null : this.robberHexId,
+      robberHexIds: (this.robberHexIds === undefined) ? [] : this.robberHexIds,
+      multiRobber: !!this.multiRobber,
+      selectedRobberIdx: (this.selectedRobberIdx === undefined) ? null : this.selectedRobberIdx,
       movingRobber: !!this.movingRobber,
       waitingToPickVictim: !!this.waitingToPickVictim,
       waitingForDiscards: this.waitingForDiscards || [],
@@ -565,6 +626,15 @@ class GameState {
     }
   }
 
+  getHexesControlledBy(player) {
+    const controlled = [];
+    this.board.hexes.forEach((h, id) => {
+        const owns = h.vertices.some(vk => this.board.getVertex(vk).ownerId === player.id);
+        if (owns) controlled.push(id);
+    });
+    return controlled;
+  }
+
   returnResources(player, cost) {
     Object.entries(cost).forEach(([res, amt]) => {
       player.resources[res] -= amt;
@@ -665,7 +735,7 @@ class GameState {
             const h = this.board.hexes.get(id);
             return h.vertices.some(vk => this.board.getVertex(vk).ownerId === p.id);
         });
-        if (ourHexes.includes(this.robberHexId)) {
+        if (ourHexes.some(id => this.robberHexIds.includes(id))) {
             this.playDevCard(p, p.devCards.indexOf(knight));
             return;
         }
@@ -1004,7 +1074,7 @@ class GameState {
       }
     } else {
       this.board.hexes.forEach((h, id) => {
-        if (h.number === tot && id !== this.robberHexId) {
+        if (h.number === tot && !this.robberHexIds.includes(id)) {
           h.vertices.forEach(vk => {
             const v = this.board.getVertex(vk);
             if (v.ownerId !== null) {
@@ -1051,6 +1121,7 @@ class GameState {
     this.log('Moving Robber...');
     if (!this.currentPlayer.isBot) {
       this.movingRobber = true;
+      this.selectedRobberIdx = (this.multiRobber) ? null : 0;
     } else {
       this.aiMoveRobber();
     }
@@ -1058,7 +1129,21 @@ class GameState {
 
   aiMoveRobber() {
     if (gameSync.isMultiplayer && !gameSync.isHost) return;
-    const hexKeys = Array.from(this.board.hexes.keys()).filter(k => k !== this.robberHexId);
+    
+    // 1. Pick which robber to move (if multiple)
+    let robberToMoveIdx = 0;
+    if (this.multiRobber) {
+        // AI: Prefer moving a robber that blocks OUR best production
+        const p = this.players[this.currentPlayerIdx];
+        const ourHexes = this.getHexesControlledBy(p);
+        const myBlockedIdx = this.robberHexIds.findIndex(rid => ourHexes.includes(rid));
+        if (myBlockedIdx !== -1) robberToMoveIdx = myBlockedIdx;
+        else robberToMoveIdx = Math.floor(Math.random() * this.robberHexIds.length);
+    }
+    this.selectedRobberIdx = robberToMoveIdx;
+
+    // 2. Pick destination
+    const hexKeys = Array.from(this.board.hexes.keys()).filter(k => !this.robberHexIds.includes(k));
     let bestHex = null;
     let maxScore = -1;
 
@@ -1106,11 +1191,16 @@ class GameState {
   }
 
   moveRobber(hexId) {
-    if (hexId === this.robberHexId) return;
-    this.robberHexId = hexId;
+    if (this.selectedRobberIdx === null) return;
+    if (this.robberHexIds.includes(hexId)) return;
+    
+    const oldPos = this.robberHexIds[this.selectedRobberIdx];
+    this.robberHexIds[this.selectedRobberIdx] = hexId;
     this.movingRobber = false;
+    this.selectedRobberIdx = null;
+
     const h = this.board.hexes.get(hexId);
-    this.log(`Robber moved to ${h.terrain.name}`);
+    this.log(`Robber moved from ${this.board.hexes.get(oldPos).terrain.name} to ${h.terrain.name}`);
 
     // Find players to rob
     const victims = [];
@@ -1509,7 +1599,8 @@ class CanvasRenderer {
   constructor(canvas, board) {
     this.canvas = canvas; this.ctx = canvas.getContext('2d');
     this.board = board;
-    this.camera = { x: 0, y: 0, zoom: 1.0 };
+    const initialZoom = (this.board.radius <= 2) ? 1.0 : (2 / this.board.radius);
+    this.camera = { x: 0, y: 0, zoom: initialZoom };
     this.diceCanvas = document.getElementById('diceCanvas');
     this.diceCtx = this.diceCanvas ? this.diceCanvas.getContext('2d') : null;
     this.logo = new Image();
@@ -1548,8 +1639,8 @@ class CanvasRenderer {
     this.ctx.translate(this.canvas.width/2 + this.camera.x, this.canvas.height/2 + this.camera.y);
     this.ctx.scale(this.camera.zoom, this.camera.zoom);
 
-    // Draw Sea Background (Dynamic buffer based on board radius)
-    const seaBuffer = this.board.radius >= 3 ? 2.25 : 1.9;
+    // Draw Sea Background (Scales with board size: +0.5 buffer per radius increment)
+    const seaBuffer = 1.0 + (this.board.radius * 0.5);
     const seaSize = (this.board.radius + seaBuffer) * this.board.hexSize * 1.5;
     this.drawPoly(0, 0, 6, seaSize, HEX_TYPES.WATER.color, false);
 
@@ -1575,16 +1666,30 @@ class CanvasRenderer {
         this.ctx.fillText(h.number, px, py);
       }
       
-      if (gs.robberHexId === id) {
-        this.ctx.fillStyle = 'rgba(50,50,50,0.8)';
+      // Draw Robber(s)
+      const robberIdx = gs.robberHexIds.indexOf(id);
+      if (robberIdx !== -1) {
+        const isSelected = gs.selectedRobberIdx === robberIdx;
+        this.ctx.fillStyle = isSelected ? 'cyan' : 'rgba(50,50,50,0.8)';
         this.ctx.beginPath(); this.ctx.arc(px, py + 10, 10, 0, Math.PI*2); this.ctx.fill();
-        this.ctx.strokeStyle = '#fff'; this.ctx.lineWidth = 2; this.ctx.stroke();
+        this.ctx.strokeStyle = isSelected ? '#000' : '#fff'; this.ctx.lineWidth = 2; this.ctx.stroke();
       }
-      if (gs.movingRobber && !gs.currentPlayer.isBot && gs.robberHexId !== id) {
-        this.ctx.strokeStyle = 'cyan'; this.ctx.lineWidth = 3;
-        this.ctx.setLineDash([5, 5]);
-        this.ctx.beginPath(); this.ctx.arc(px, py, 40, 0, Math.PI*2); this.ctx.stroke();
-        this.ctx.setLineDash([]);
+
+      // Selection/Placement highlight
+      if (gs.movingRobber && !gs.currentPlayer.isBot) {
+        if (gs.multiRobber && gs.selectedRobberIdx === null) {
+          // Highlight existing robbers to pick one
+          if (robberIdx !== -1) {
+            this.ctx.strokeStyle = 'cyan'; this.ctx.lineWidth = 3;
+            this.ctx.beginPath(); this.ctx.arc(px, py + 10, 15, 0, Math.PI*2); this.ctx.stroke();
+          }
+        } else if (!gs.robberHexIds.includes(id)) {
+          // Highlight placement destinations
+          this.ctx.strokeStyle = 'cyan'; this.ctx.lineWidth = 3;
+          this.ctx.setLineDash([5, 5]);
+          this.ctx.beginPath(); this.ctx.arc(px, py, 43, 0, Math.PI*2); this.ctx.stroke();
+          this.ctx.setLineDash([]);
+        }
       }
     });
 
@@ -2005,12 +2110,14 @@ class InputHandler {
         if (Math.hypot(dx, dy) > 5) this.dragMoved = true;
     } else if (e.touches.length === 2) {
         const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-        const delta = dist - this.lastTouchDist;
-        const zoomSpeed = 0.01;
-        const oldZoom = this.ren.camera.zoom;
-        const newZoom = Math.min(Math.max(0.3, oldZoom + delta * zoomSpeed), 3.0);
-        
-        this.ren.camera.zoom = newZoom;
+        if (this.lastTouchDist > 0) {
+            const ratio = dist / this.lastTouchDist;
+            const oldZoom = this.ren.camera.zoom;
+            // Removed heavy damping to allow for faster zooming on large boards
+            const newZoom = Math.min(Math.max(0.05, oldZoom * ratio), 3.0);
+            
+            this.ren.camera.zoom = newZoom;
+        }
         this.lastTouchDist = dist;
         this.dragMoved = true;
     }
@@ -2087,10 +2194,14 @@ class InputHandler {
   wheel(e) {
     if (this.isAnyModalVisible()) return;
     e.preventDefault();
-    const zoomSpeed = 0.001;
+    
     const delta = -e.deltaY;
     const oldZoom = this.ren.camera.zoom;
-    const newZoom = Math.min(Math.max(0.3, oldZoom + delta * zoomSpeed), 3.0);
+    
+    // Smooth multiplicative zoom that respects scroll wheel speed
+    // 0.0015 provides a good balance between speed and precision
+    const zoomFactor = Math.exp(delta * 0.0015);
+    const newZoom = Math.min(Math.max(0.05, oldZoom * zoomFactor), 3.0);
     
     // Zoom towards mouse position
     const r = this.canvas.getBoundingClientRect();
@@ -2117,25 +2228,40 @@ class InputHandler {
     let stateChanged = false;
     if(this.gs.movingRobber) {
         if(this.hover.type==='hex') {
-            if (this.hover.id === this.gs.robberHexId) {
-                this.gs.log('Robber must move to a different hex.');
-                return;
-            }
             const h = this.board.hexes.get(this.hover.id);
+            const robberIdx = this.gs.robberHexIds.indexOf(this.hover.id);
 
-            if(this.gs.friendlyRobber) {
-                const affected = h.vertices.some(vk => {
-                    const v = this.board.getVertex(vk);
-                    // Friendly Robber: Cannot place on hex affecting ANY other player with <= 2 points
-                    return v.ownerId !== null && v.ownerId !== gameSync.localPlayerId && this.gs.players[v.ownerId].victoryPoints <= 2;
-                });
-                if(affected) { 
-                    this.gs.log('Friendly Robber: Cannot target players with <= 2 points.'); 
-                    return; 
+            // Phase 1: Pick a robber (if not already picked)
+            if (this.gs.multiRobber && this.gs.selectedRobberIdx === null) {
+                if (robberIdx !== -1) {
+                    this.gs.selectedRobberIdx = robberIdx;
+                    this.gs.log('Robber selected. Now pick a new hex.');
+                    stateChanged = true;
+                } else {
+                    this.gs.log('Pick a hex that currently has a robber.');
                 }
+            } 
+            // Phase 2: Move the picked robber
+            else {
+                if (this.gs.robberHexIds.includes(this.hover.id)) {
+                    this.gs.log('Robber must move to a hex with no robbers.');
+                    return;
+                }
+
+                if(this.gs.friendlyRobber) {
+                    const affected = h.vertices.some(vk => {
+                        const v = this.board.getVertex(vk);
+                        return v.ownerId !== null && v.ownerId !== gameSync.localPlayerId && this.gs.players[v.ownerId].victoryPoints <= 2;
+                    });
+                    if(affected) { 
+                        this.gs.log('Friendly Robber: Cannot target players with <= 2 points.'); 
+                        return;
+                    }
+                }
+                
+                this.gs.moveRobber(this.hover.id);
+                stateChanged = true;
             }
-            this.gs.moveRobber(this.hover.id);
-            stateChanged = true;
         }
     } else if (this.gs.pendingRoads > 0) {
         if (this.hover.type === 'edge') {
@@ -2201,29 +2327,36 @@ const winHost = document.getElementById('winPointsHost');
 const winHostVal = document.getElementById('winPointsValueHost');
 
 function updateMenuOptions() {
-  const limits = { '1': 8, '2': 15, '3': 25 };
+  const limits = { '1': 8, '2': 15, '3': 25, '4': 35, '5': 50, '19': 100 };
+  const playerCap = { '1': 3, '2': 4, '3': 6, '4': 8, '5': 10, '19': 38 };
 
   // Solo limits
   if (boardSolo && winSolo) {
-      const isLargeSolo = boardSolo.value === '3';
+      const radiusVal = boardSolo.value;
+      const maxPlayers = playerCap[radiusVal] || 4;
+      // Clamp based on available distinct colors to prevent duplicates if possible, 
+      // but allow up to the map's capacity
+      const effectiveMaxPlayers = Math.min(maxPlayers, PLAYER_COLORS.length);
+      const maxAIs = effectiveMaxPlayers - 1;
+
       Array.from(aiCountSelect.options).forEach(opt => {
         const val = parseInt(opt.value);
-        if (val > 3) {
-          opt.disabled = !isLargeSolo;
-          opt.style.display = isLargeSolo ? 'block' : 'none';
-        }
+        const disabled = val > maxAIs;
+        opt.disabled = disabled;
+        opt.style.display = disabled ? 'none' : 'block';
       });
-      if (!isLargeSolo && parseInt(aiCountSelect.value) > 3) aiCountSelect.value = '3';
+      if (parseInt(aiCountSelect.value) > maxAIs) aiCountSelect.value = maxAIs.toString();
       
-      const maxSolo = limits[boardSolo.value] || 15;
-      winSolo.max = maxSolo;
-      if (parseInt(winSolo.value) > maxSolo) winSolo.value = maxSolo;
+      const maxPoints = limits[radiusVal] || 15;
+      winSolo.max = maxPoints;
+      if (parseInt(winSolo.value) > maxPoints) winSolo.value = maxPoints;
       if (winSoloVal) winSoloVal.innerText = winSolo.value;
   }
 
   // Host limits
   if (boardHost && winHost) {
-      const maxHost = limits[boardHost.value] || 15;
+      const radiusVal = boardHost.value;
+      const maxHost = limits[radiusVal] || 15;
       winHost.max = maxHost;
       if (parseInt(winHost.value) > maxHost) winHost.value = maxHost;
       if (winHostVal) winHostVal.innerText = winHost.value;
@@ -2747,19 +2880,15 @@ class GameSync {
                     this.isHost = true;
                     this.localPlayerId = 0;
                     
-                    const colors = ['#0099ff', '#ff4444', '#ffcc00', '#ffffff', '#e67e22', '#9b59b6'];
-
-                    const br = parseInt(document.getElementById('boardSizeHost').value) || 2;
-                    const wp = parseInt(document.getElementById('winPointsHost').value) || 10;
-                    const fr = document.getElementById('friendlyRobberHost').checked;
-
-                    const p0 = new Player(0, myName, colors[0], false);
+                    const p0 = new Player(0, myName, PLAYER_COLORS[0], false);
                     const initialBoard = new Board(br);
-                    const initialGs = new GameState(initialBoard, [p0], wp, fr, "Skilled");
+                    const initialGs = new GameState(initialBoard, [p0], wp, fr, "Skilled", mr);
                     transaction.set(this.gameRef, initialGs.toJSON());
                 } else {
                     const data = doc.data();
                     const tempGs = GameState.fromJSON(data);
+                    const playerCap = { '1': 3, '2': 4, '3': 6, '4': 8, '5': 10, '19': 38 };
+                    const maxPlayers = playerCap[tempGs.board.radius] || 6;
 
                     if (session && session.matchId === id) {
                         this.isHost = session.isHost;
@@ -2785,10 +2914,9 @@ class GameSync {
                             if (idx !== -1) {
                                 tempGs.players[idx].name = myName;
                                 if (tempGs.players[idx].isBot) tempGs.players[idx].isBot = false;
-                            } else if (tempGs.players.length < 6) {
+                            } else if (tempGs.players.length < maxPlayers) {
                                 idx = tempGs.players.length;
-                                const colors = ['#0099ff', '#ff4444', '#ffcc00', '#ffffff', '#e67e22', '#9b59b6'];
-                                tempGs.players.push(new Player(idx, myName, colors[idx % colors.length], false));
+                                tempGs.players.push(new Player(idx, myName, PLAYER_COLORS[idx % PLAYER_COLORS.length], false));
                             } else {
                                 throw new Error("Game is full!");
                             }
@@ -2983,7 +3111,7 @@ function getProfileName() {
 function resetGame(config) {
   lastGameConfig = config;
   isOnlyBotsMode = config.onlyBots;
-  const { aiCount, boardRadius, winPoints, friendlyRobber, aiDifficulty, onlyBots } = config;
+  const { aiCount, boardRadius, winPoints, friendlyRobber, multiRobber, aiDifficulty, onlyBots } = config;
   const myName = getProfileName();
   localStorage.setItem('hexbound_playername', myName);
   
@@ -2993,19 +3121,18 @@ function resetGame(config) {
   document.getElementById('ruleWinPoints').innerHTML = `<strong>Victory:</strong> Reach ${winPoints} points.`;
 
   board = new Board(boardRadius);
-  const colors = ['#0099ff', '#ff4444', '#ffcc00', '#ffffff', '#e67e22', '#9b59b6'];
   let players = [];
   
   if (onlyBots && !gameSync.isMultiplayer) {
     for (let i = 0; i <= aiCount; i++) {
-        players.push(new Player(i, `AI ${i}`, colors[i % colors.length], true));
+        players.push(new Player(i, `AI ${i}`, PLAYER_COLORS[i % PLAYER_COLORS.length], true));
     }
   } else {
     // Preserve existing human players in lobby
     let humanPlayers = (gs && gs.players) ? gs.players.filter(p => !p.isBot) : [];
     
     if (humanPlayers.length === 0) {
-        players.push(new Player(0, myName, colors[0], false));
+        players.push(new Player(0, myName, PLAYER_COLORS[0], false));
     } else {
         players = [...humanPlayers];
         // Ensure our name matches what's in the input
@@ -3018,7 +3145,7 @@ function resetGame(config) {
     if (!gameSync.isMultiplayer) {
       for (let i = 0; i < aiCount; i++) {
           const nextIdx = players.length;
-          players.push(new Player(nextIdx, `AI ${nextIdx}`, colors[nextIdx % colors.length], true));
+          players.push(new Player(nextIdx, `AI ${nextIdx}`, PLAYER_COLORS[nextIdx % PLAYER_COLORS.length], true));
       }
     }
   }
@@ -3026,7 +3153,7 @@ function resetGame(config) {
   // Final sanitization of IDs to match indices
   players.forEach((p, idx) => p.id = idx);
 
-  gs = new GameState(board, players, winPoints, friendlyRobber, aiDifficulty);
+  gs = new GameState(board, players, winPoints, friendlyRobber, aiDifficulty, multiRobber);
   gs.started = true;
   ren = new CanvasRenderer(canvas, board);
   inp = new InputHandler(canvas, board, gs, ren);
@@ -3082,6 +3209,7 @@ if (startSoloBtn) {
             boardRadius: parseInt(document.getElementById('boardSizeSolo').value),
             winPoints: parseInt(document.getElementById('winPointsSolo').value),
             friendlyRobber: document.getElementById('friendlyRobberSolo').checked,
+            multiRobber: document.getElementById('multiRobberSolo').checked,
             aiDifficulty: document.getElementById('aiDifficulty').value,
             onlyBots: document.getElementById('onlyBots').checked
         };
@@ -3207,6 +3335,7 @@ startGameBtn.onclick = async () => {
     boardRadius: parseInt(document.getElementById('boardSizeHost').value),
     winPoints: parseInt(document.getElementById('winPointsHost').value),
     friendlyRobber: document.getElementById('friendlyRobberHost').checked,
+    multiRobber: document.getElementById('multiRobberHost').checked,
     aiDifficulty: 'Skilled',
     onlyBots: false
   };
