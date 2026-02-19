@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>HexBound - Strategy Board Game</title>
     <style>
         body {
@@ -59,6 +59,10 @@
             border-radius: 4px;
             cursor: pointer;
             transition: 0.2s;
+        }
+
+        #showSingleplayerBtn, #showMultiplayerBtn, #showHostMenuBtn, #showJoinMenuBtn {
+            padding: 18px 24px;
         }
 
         button:hover { background-color: #27ae60; }
@@ -211,8 +215,58 @@
             font-size: 16px;
         }
 
+        .option-group input[type="checkbox"] {
+            width: auto;
+            margin: 0;
+            padding: 0;
+            cursor: pointer;
+        }
+
         #game-interface {
             display: none; /* Hidden until game starts */
+        }
+
+        /* Toast Notification System */
+        #toast-container {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 10000;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            pointer-events: none;
+        }
+
+        .toast {
+            min-width: 250px;
+            padding: 15px 20px;
+            background: #34495e;
+            color: white;
+            border-left: 5px solid #3498db;
+            border-radius: 4px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            pointer-events: auto;
+            animation: toast-in 0.3s ease-out forwards;
+            font-size: 14px;
+            line-height: 1.4;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .toast.success { border-left-color: #2ecc71; }
+        .toast.error { border-left-color: #e74c3c; }
+        .toast.warning { border-left-color: #f1c40f; }
+
+        @keyframes toast-in {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+
+        @keyframes toast-out {
+            from { transform: translateX(0); opacity: 1; }
+            to { transform: translateX(100%); opacity: 0; }
         }
 
         /* Modal Centering & Backdrop */
@@ -268,7 +322,7 @@
                 width: 100%;
             }
             #controls {
-                bottom: 80px; /* Bring buttons up a bit */
+                bottom: calc(85px + env(safe-area-inset-bottom)); /* Extra room for Android Nav / iOS Home Bar */
                 padding: 5px;
                 width: auto;
                 background: rgba(0,0,0,0.7);
@@ -281,6 +335,7 @@
                 font-size: 11px;
             }
             .rules-hint {
+                bottom: calc(20px + env(safe-area-inset-bottom));
                 width: 200px;
                 font-size: 11px;
             }
@@ -306,16 +361,28 @@
 </head>
 <body style="touch-action: none;">
     <div id="menu-overlay">
-        <div class="menu-card">
-            <h1>HEXBOUND</h1>
+        <!-- Main Menu -->
+        <div id="main-menu" class="menu-card">
+            <img src="assets/HexBound_logo.png" alt="HEXBOUND" style="width: 320px; margin-bottom: 20px;">
+            <button id="showSingleplayerBtn" style="width: 100%; margin-bottom: 15px; background: #2ecc71;">Singleplayer</button>
+            <button id="showMultiplayerBtn" style="width: 100%; background: #3498db;">Multiplayer</button>
+        </div>
+
+        <!-- Singleplayer Setup -->
+        <div id="singleplayer-menu" class="menu-card" style="display: none;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
+                <button class="back-btn" style="padding: 5px 10px; font-size: 12px; background: #7f8c8d;">&larr; Back</button>
+                <h2 style="margin: 0; color: #f1c40f; font-size: 18px;">Singleplayer Setup</h2>
+            </div>
+            
             <div class="option-group">
                 <label>Your Name</label>
-                <input type="text" id="playerName" value="Human" placeholder="Enter your name">
+                <input type="text" id="playerNameSolo" value="Human" placeholder="Enter your name">
             </div>
+
             <div class="option-group">
                 <label>Number of AI Opponents</label>
                 <select id="aiCount">
-                    <option value="0">0 AIs (Multiplayer Only)</option>
                     <option value="1">1 AI</option>
                     <option value="2">2 AIs</option>
                     <option value="3" selected>3 AIs</option>
@@ -323,46 +390,127 @@
                     <option value="5">5 AIs</option>
                 </select>
             </div>
-            <div class="option-group">
-                <label>Online Multiplayer (Match ID)</label>
-                <div style="display:flex; gap:10px;">
-                    <input type="text" id="matchId" placeholder="Match ID (e.g. my-room)" style="flex:1;">
-                    <button id="joinMatchBtn" style="padding:5px 10px; font-size:12px; background:#3498db;">Sync</button>
-                </div>
-                <small id="syncStatus" style="color:#aaa; display:block; margin-top:5px;">Not synced.</small>
-            </div>
+
             <div class="option-group">
                 <label>Board Size</label>
-                <select id="boardSize">
+                <select id="boardSizeSolo">
                     <option value="1">Small (7 Hexes)</option>
                     <option value="2" selected>Standard (19 Hexes)</option>
                     <option value="3">Large (37 Hexes)</option>
                 </select>
             </div>
+
             <div class="option-group">
                 <label>AI Difficulty</label>
                 <select id="aiDifficulty">
-                    <option value="Beginner">Beginner (Slow & Random)</option>
-                    <option value="Skilled" selected>Skilled (Balanced Strategy)</option>
-                    <option value="Master">Master (Aggressive & Strategic)</option>
+                    <option value="Beginner">Beginner</option>
+                    <option value="Skilled" selected>Skilled</option>
+                    <option value="Master">Master</option>
                 </select>
             </div>
+
             <div class="option-group">
-                <label>Victory Points to Win: <span id="winPointsValue">10</span></label>
-                <input type="range" id="winPoints" min="3" max="25" value="10" style="padding:0; margin-top:10px;">
-                <small id="winLimitHint" style="display:block;margin-top:5px;color:#95a5a6;font-size:12px;">Based on Board Size</small>
+                <label>Win Points: <span id="winPointsValueSolo">10</span></label>
+                <input type="range" id="winPointsSolo" min="3" max="25" value="10">
             </div>
+
             <div class="option-group" style="display: flex; align-items: center; gap: 10px;">
-                <input type="checkbox" id="friendlyRobber" style="width: 20px;">
+                <input type="checkbox" id="friendlyRobberSolo">
                 <label style="margin-bottom: 0;">Friendly Robber (Safe at 2 pts)</label>
             </div>
+
             <div class="option-group" style="display: flex; align-items: center; gap: 10px;">
-                <input type="checkbox" id="onlyBots" style="width: 20px;">
+                <input type="checkbox" id="onlyBots">
                 <label style="margin-bottom: 0;">Only Bots Mode (Auto-Battle)</label>
             </div>
-            <button id="startGameBtn">Start Game</button>
+
+            <button id="startSoloBtn" style="width: 100%;">Start Game</button>
+        </div>
+
+        <!-- Multiplayer Selection -->
+        <div id="multiplayer-choice-menu" class="menu-card" style="display: none;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
+                <button class="back-btn" style="padding: 5px 10px; font-size: 12px; background: #7f8c8d;">&larr; Back</button>
+                <h2 style="margin: 0; color: #3498db; font-size: 18px;">Online Multiplayer</h2>
+            </div>
+            <button id="showHostMenuBtn" style="width: 100%; margin-bottom: 15px; background: #2ecc71;">Host Game</button>
+            <button id="showJoinMenuBtn" style="width: 100%; background: #3498db;">Join Game</button>
+        </div>
+
+        <!-- Host Setup -->
+        <div id="host-menu" class="menu-card" style="display: none;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
+                <button class="back-btn" style="padding: 5px 10px; font-size: 12px; background: #7f8c8d;">&larr; Back</button>
+                <h2 style="margin: 0; color: #f1c40f; font-size: 18px;">Host New Match</h2>
+            </div>
+
+            <div class="option-group">
+                <label>Your Name</label>
+                <input type="text" id="playerNameHost" value="Host" placeholder="Enter your name">
+            </div>
+
+            <div class="option-group">
+                <label>Match ID (Shared with friends)</label>
+                <input type="text" id="matchIdHost" placeholder="e.g. cool-room-123">
+            </div>
+
+            <div class="option-group">
+                <label>Board Size</label>
+                <select id="boardSizeHost">
+                    <option value="1">Small (7 Hexes)</option>
+                    <option value="2" selected>Standard (19 Hexes)</option>
+                    <option value="3">Large (37 Hexes)</option>
+                </select>
+            </div>
+
+            <div class="option-group">
+                <label>Win Points: <span id="winPointsValueHost">10</span></label>
+                <input type="range" id="winPointsHost" min="3" max="25" value="10">
+            </div>
+
+            <div class="option-group" style="display: flex; align-items: center; gap: 10px;">
+                <input type="checkbox" id="friendlyRobberHost">
+                <label style="margin-bottom: 0;">Friendly Robber (Safe at 2 pts)</label>
+            </div>
+
+            <button id="createMatchBtn" style="width: 100%;">Create Lobby</button>
+        </div>
+
+        <!-- Join Setup -->
+        <div id="join-menu" class="menu-card" style="display: none;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
+                <button class="back-btn" style="padding: 5px 10px; font-size: 12px; background: #7f8c8d;">&larr; Back</button>
+                <h2 style="margin: 0; color: #3498db; font-size: 18px;">Join Match</h2>
+            </div>
+
+            <div class="option-group">
+                <label>Your Name</label>
+                <input type="text" id="playerNameJoin" value="Guest" placeholder="Enter your name">
+            </div>
+
+            <div class="option-group">
+                <label>Match ID</label>
+                <input type="text" id="matchIdJoin" placeholder="Enter code here...">
+            </div>
+
+            <button id="joinConfirmBtn" style="width: 100%; background: #3498db;">Join Game</button>
+        </div>
+
+        <!-- Match Lobby (Shared for Multi) -->
+        <div id="lobby-menu" class="menu-card" style="display: none;">
+            <h1 id="menuTitle">Match Lobby</h1>
+            <p id="playerCountDisplay" style="color: #bdc3c7; font-size: 14px; margin-top: -15px; margin-bottom: 10px;"></p>
+            <p id="lobbyMatchId" style="color: #3498db; font-weight: bold; margin-bottom: 20px;"></p>
+            
+            <small id="syncStatus" style="color:#aaa; display:block; margin-bottom:15px;"></small>
+            
+            <button id="startGameBtn" style="width: 100%; margin-bottom: 10px;">Start Game</button>
+            <button id="lobbyAbandonBtn" style="width: 100%; background: #e74c3c;">Leave Lobby</button>
         </div>
     </div>
+
+    <!-- Toast Container -->
+    <div id="toast-container"></div>
 
     <div id="game-interface">
         
@@ -454,7 +602,7 @@
                     <button id="tradeBtn" disabled style="background: #e67e22;">Trade Player</button>
                     <button id="buyDevBtn" disabled style="background: #9b59b6;">Buy Dev Card</button>
                     <button id="endBtn" disabled>End Turn</button>
-                    <button id="abandonBtn" style="background: #e74c3c; display: none; font-size: 11px;">Abandon Game</button>
+                    <button id="gameAbandonBtn" style="background: #e74c3c; display: none; font-size: 11px;">Abandon Game</button>
                     <button id="resetCamBtn" style="background: #7f8c8d; font-size: 11px;">Reset View</button>
                 </div>
                 <div id="dev-card-container" style="display:flex; gap:5px; margin-top:5px; flex-wrap:wrap; justify-content:center;"></div>

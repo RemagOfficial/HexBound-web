@@ -72,6 +72,7 @@ class Board {
   }
 
   fromJSON(data) {
+    this.radius = data.radius;
     this.hexes = new Map(Object.entries(data.hexes));
     this.vertices = new Map(Object.entries(data.vertices).map(([k, v]) => {
         const vertex = new Vertex(v.id, v.x, v.y);
@@ -224,11 +225,24 @@ class Player {
   }
 
   toJSON() {
-    return { ...this };
+    const data = { ...this };
+    delete data.isBot;
+    return data;
   }
 
   fromJSON(data) {
+    const oldIsBot = this.isBot;
     Object.assign(this, data);
+    
+    if (gameSync.isHost) {
+        // Host restores bot state locally based on name prefix (AI/Bot)
+        // If a human guest replaces a bot, their name won't match, so isBot becomes false.
+        this.isBot = (this.name && (this.name.startsWith("AI ") || this.name.startsWith("Bot "))) ? true : false;
+        // If it was already a bot and name didn't change, we keep it true.
+    } else {
+        // Guests treat everyone as human.
+        this.isBot = false;
+    }
   }
 
   static fromJSON(data) {
@@ -293,6 +307,7 @@ class GameState {
     this.aiTradeAttempts = 0; // Track AI trade attempts per turn
     this.playedDevCardThisTurn = false;
     this.pendingRoads = 0;
+    this.started = false;
     
     // Bank Resources initialization
     const resCount = (this.players.length > 4) ? 24 : 19;
@@ -351,7 +366,8 @@ class GameState {
       initialPlacements: (this.initialPlacements === undefined) ? 0 : this.initialPlacements,
       targetScore: (this.targetScore === undefined) ? 10 : this.targetScore,
       friendlyRobber: !!this.friendlyRobber,
-      aiDifficulty: this.aiDifficulty || 'Normal'
+      aiDifficulty: this.aiDifficulty || 'Normal',
+      started: !!this.started
     };
   }
 
@@ -370,7 +386,7 @@ class GameState {
         if (!wasBot && this.players[idx].isBot && gameSync.isHost) {
             if (this.waitingForDiscards.includes(idx)) {
                 const totalRes = Object.values(this.players[idx].resources).reduce((a, b) => a + b, 0);
-                setTimeout(() => this.aiDiscard(idx, Math.floor(totalRes / 2)), 1000);
+                setTimeout(() => this.aiDiscard(idx, Math.max(1, Math.ceil(totalRes / 2))), 1000);
             } else if (this.currentPlayerIdx === idx) {
                 const token = this.turnToken;
                 if (this.phase === 'INITIAL') {
@@ -432,8 +448,7 @@ class GameState {
     switch (card.type) {
       case 'KNIGHT':
         p.playedKnights++;
-        this.movingRobber = true;
-        this.waitingToPickVictim = true;
+        this.startRobberPhase();
         this.updateLargestArmy();
         break;
       case 'ROAD_BUILDING':
@@ -970,7 +985,7 @@ class GameState {
       this.players.forEach(p => {
         const totalRes = Object.values(p.resources).reduce((a,b) => a+b, 0);
         if (totalRes > 7) {
-            const count = Math.floor(totalRes / 2);
+            const count = Math.ceil(totalRes / 2);
             this.waitingForDiscards.push(p.id);
             if (p.isBot) {
                 setTimeout(() => this.aiDiscard(p.id, count), 1000 + Math.random() * 1000);
@@ -982,7 +997,7 @@ class GameState {
           const humanNeedsDiscard = this.waitingForDiscards.includes(gameSync.localPlayerId) && !isOnlyBotsMode;
           if (humanNeedsDiscard) {
               const totalRes = Object.values(this.players[gameSync.localPlayerId].resources).reduce((a,b) => a+b, 0);
-              if (typeof setupDiscardUI === 'function') setupDiscardUI(Math.floor(totalRes / 2));
+              if (typeof setupDiscardUI === 'function') setupDiscardUI(Math.ceil(totalRes / 2));
           }
       } else {
           this.startRobberPhase();
@@ -1497,6 +1512,8 @@ class CanvasRenderer {
     this.camera = { x: 0, y: 0, zoom: 1.0 };
     this.diceCanvas = document.getElementById('diceCanvas');
     this.diceCtx = this.diceCanvas ? this.diceCanvas.getContext('2d') : null;
+    this.logo = new Image();
+    this.logo.src = 'assets/HexBound_logo.png';
   }
   render(gs, hover) {
     if (gs.diceAnim.timer > 0) {
@@ -1755,7 +1772,7 @@ class CanvasRenderer {
 
     // --- LEFT PANEL: TURN & ACTION ---
     const ACTION_WIDTH = isMobile ? 130 : 180;
-    const ACTION_HEIGHT = isMobile ? 280 : 320;
+    const ACTION_HEIGHT = isMobile ? 320 : 380;
     this.ctx.fillStyle = 'rgba(50,50,50,0.75)';
     this.ctx.fillRect(10, 10, ACTION_WIDTH, ACTION_HEIGHT);
     this.ctx.strokeStyle = '#fff'; this.ctx.lineWidth = 1; this.ctx.strokeRect(10, 10, ACTION_WIDTH, ACTION_HEIGHT);
@@ -1764,19 +1781,29 @@ class CanvasRenderer {
     this.ctx.font = isMobile ? 'bold 12px Arial' : 'bold 16px Arial';
     this.ctx.textAlign = 'left';
     this.ctx.textBaseline = 'top';
-    this.ctx.fillText('HEXBOUND', 20, 20);
+    
+    let logoOffset = isMobile ? 40 : 45;
+    if (this.logo.complete) {
+        const logoW = isMobile ? 110 : 140;
+        const logoH = (this.logo.height / this.logo.width) * logoW;
+        const logoX = 10 + (ACTION_WIDTH - logoW) / 2;
+        this.ctx.drawImage(this.logo, logoX, 15, logoW, logoH);
+        logoOffset = 15 + logoH + (isMobile ? 5 : 10);
+    } else {
+        this.ctx.fillText('HEXBOUND', 20, 20);
+    }
 
     if (gs.movingRobber && !gs.currentPlayer.isBot) {
       this.ctx.fillStyle = '#f1c40f';
       this.ctx.font = isMobile ? 'bold 10px Arial' : 'bold 11px Arial';
-      this.ctx.fillText('MOVE ROBBER', 20, isMobile ? 40 : 45);
+      this.ctx.fillText('MOVE ROBBER', 20, logoOffset);
     } else {
       this.ctx.font = isMobile ? '10px Arial' : '12px Arial';
       this.ctx.fillStyle = gs.currentPlayer.color;
-      this.ctx.fillText(gs.currentPlayer.name, 20, isMobile ? 40 : 45);
+      this.ctx.fillText(gs.currentPlayer.name, 20, logoOffset);
     }
 
-    let ly = isMobile ? 65 : 70;
+    let ly = logoOffset + (isMobile ? 22 : 28);
     const human = gs.players[gameSync.localPlayerId];
     const humanTotal = Object.values(human.resources).reduce((a, b) => a + b, 0);
     
@@ -1785,7 +1812,9 @@ class CanvasRenderer {
     this.ctx.fillText(humanTotal > 7 ? 'YOUR RESOURCES: ⚠️' : 'YOUR RESOURCES:', 20, ly);
     
     this.ctx.font = isMobile ? '9px Arial' : '11px Arial';
-    Object.entries(human.resources).forEach(([r, v]) => {
+    const resources = ['WOOD', 'BRICK', 'SHEEP', 'WHEAT', 'ORE'];
+    resources.forEach(r => {
+      const v = human.resources[r] || 0;
       ly += isMobile ? 12 : 15;
       this.ctx.fillText(`${r}: ${v}`, 30, ly);
     });
@@ -1795,7 +1824,8 @@ class CanvasRenderer {
     this.ctx.font = isMobile ? 'bold 10px Arial' : 'bold 11px Arial';
     this.ctx.fillText('BANK RESOURCES:', 20, ly);
     this.ctx.font = isMobile ? '9px Arial' : '11px Arial';
-    Object.entries(gs.bankResources).forEach(([r, v]) => {
+    resources.forEach(r => {
+      const v = gs.bankResources[r] || 0;
       ly += isMobile ? 12 : 15;
       this.ctx.fillText(`${r}: ${v}`, 30, ly);
     });
@@ -1809,9 +1839,9 @@ class CanvasRenderer {
       this.ctx.font = isMobile ? '9px Arial' : '11px Arial';
       this.ctx.textAlign = 'left';
       this.ctx.fillText(`ID: ${gameSync.matchId}`, 35, ly);
-      document.getElementById('abandonBtn').style.display = 'block';
+      document.getElementById('gameAbandonBtn').style.display = 'block';
     } else {
-      document.getElementById('abandonBtn').style.display = 'none';
+      document.getElementById('gameAbandonBtn').style.display = 'none';
     }
 
     if (gs.friendlyRobber) {
@@ -2142,42 +2172,93 @@ const endBtn = document.getElementById('endBtn');
 const startGameBtn = document.getElementById('startGameBtn');
 const menuOverlay = document.getElementById('menu-overlay');
 const gameInterface = document.getElementById('game-interface');
-const boardSizeSelect = document.getElementById('boardSize');
+
+// UI Screens
+const mainMenu = document.getElementById('main-menu');
+const singleplayerMenu = document.getElementById('singleplayer-menu');
+const multiplayerMenu = document.getElementById('multiplayer-choice-menu');
+const hostMenu = document.getElementById('host-menu');
+const joinMenu = document.getElementById('join-menu');
+const lobbyMenu = document.getElementById('lobby-menu');
+
+function showScreen(screen) {
+    if (!screen) return;
+    [mainMenu, singleplayerMenu, multiplayerMenu, hostMenu, joinMenu, lobbyMenu].forEach(s => {
+        if (s) s.style.display = 'none';
+    });
+    screen.style.display = 'block';
+}
+
+// Settings in Solo
+const boardSolo = document.getElementById('boardSizeSolo');
 const aiCountSelect = document.getElementById('aiCount');
-const winPointsInput = document.getElementById('winPoints');
-const winPointsValue = document.getElementById('winPointsValue');
-const winLimitHint = document.getElementById('winLimitHint');
+const winSolo = document.getElementById('winPointsSolo');
+const winSoloVal = document.getElementById('winPointsValueSolo');
+
+// Settings in Host
+const boardHost = document.getElementById('boardSizeHost');
+const winHost = document.getElementById('winPointsHost');
+const winHostVal = document.getElementById('winPointsValueHost');
 
 function updateMenuOptions() {
-  const isLarge = boardSizeSelect.value === '3';
-  
-  // Restriction: 4 and 5 bots only on Large (3)
-  Array.from(aiCountSelect.options).forEach(opt => {
-    const val = parseInt(opt.value);
-    if (val > 3) {
-      opt.disabled = !isLarge;
-      opt.style.display = isLarge ? 'block' : 'none';
-    }
-  });
-  
-  // If current AI selection is now invalid, snap back to 3
-  if (!isLarge && parseInt(aiCountSelect.value) > 3) {
-    aiCountSelect.value = '3';
+  const limits = { '1': 8, '2': 15, '3': 25 };
+
+  // Solo limits
+  if (boardSolo && winSolo) {
+      const isLargeSolo = boardSolo.value === '3';
+      Array.from(aiCountSelect.options).forEach(opt => {
+        const val = parseInt(opt.value);
+        if (val > 3) {
+          opt.disabled = !isLargeSolo;
+          opt.style.display = isLargeSolo ? 'block' : 'none';
+        }
+      });
+      if (!isLargeSolo && parseInt(aiCountSelect.value) > 3) aiCountSelect.value = '3';
+      
+      const maxSolo = limits[boardSolo.value] || 15;
+      winSolo.max = maxSolo;
+      if (parseInt(winSolo.value) > maxSolo) winSolo.value = maxSolo;
+      if (winSoloVal) winSoloVal.innerText = winSolo.value;
   }
 
-  // Update win point limits
-  const limits = { '1': 8, '2': 15, '3': 25 };
-  const max = limits[boardSizeSelect.value] || 15;
-  winPointsInput.max = max;
-  winLimitHint.innerText = `Max: ${max} points for this size`;
-  if (parseInt(winPointsInput.value) > max) winPointsInput.value = max;
-  winPointsValue.innerText = winPointsInput.value;
+  // Host limits
+  if (boardHost && winHost) {
+      const maxHost = limits[boardHost.value] || 15;
+      winHost.max = maxHost;
+      if (parseInt(winHost.value) > maxHost) winHost.value = maxHost;
+      if (winHostVal) winHostVal.innerText = winHost.value;
+  }
 }
-boardSizeSelect.addEventListener('change', updateMenuOptions);
-winPointsInput.addEventListener('input', () => {
-    winPointsValue.innerText = winPointsInput.value;
-});
+
+if (boardSolo) boardSolo.onchange = updateMenuOptions;
+if (boardHost) boardHost.onchange = updateMenuOptions;
+if (winSolo) winSolo.oninput = updateMenuOptions;
+if (winHost) winHost.oninput = updateMenuOptions;
 updateMenuOptions();
+
+// Toast notification helper
+function showToast(message, type = 'info') {
+    const container = document.getElementById('toast-container');
+    if (!container) return;
+
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    toast.innerHTML = `
+        <span>${message}</span>
+        <span style="margin-left: 15px; cursor: pointer; opacity: 0.7;" onclick="this.parentElement.remove()">&times;</span>
+    `;
+    
+    container.appendChild(toast);
+    
+    // Auto-remove after 4 seconds
+    setTimeout(() => {
+        toast.style.animation = 'toast-out 0.3s ease-in forwards';
+        setTimeout(() => toast.remove(), 300);
+    }, 4000);
+}
+
+// --- BUTTON CLICK HANDLERS ---
+// Navigation handlers moved to end of file for consistency with previous edits.
 
 const tradePanel = document.getElementById('trade-panel');
 const tradeGiveContainer = document.getElementById('trade-give');
@@ -2499,7 +2580,7 @@ sendTradeBtn.onclick = async () => {
     const get = {}; Object.entries(playerTradeWants).forEach(([r, a]) => { if (a > 0) get[r] = a; });
     
     if (Object.keys(give).length === 0 && Object.keys(get).length === 0) {
-        alert("Select resources for the trade!");
+        showToast("Select resources for the trade!", "warning");
         return;
     }
 
@@ -2543,7 +2624,7 @@ function showTradeGetOptions(fromRes) {
         btn.onclick = async () => {
             if(!gs.tradeWithBank(fromRes, toRes)) {
                 const rate = gs.getTradeRate(gs.currentPlayer, fromRes);
-                alert(`Not enough ${fromRes}! Need at least ${rate}.`);
+                showToast(`Not enough ${fromRes}! Need at least ${rate}.`, "warning");
                 setupTradeUI(); // Reset if somehow they don't have enough now
             } else {
                 setupTradeUI(); // Refresh state after trade
@@ -2602,7 +2683,7 @@ class GameSync {
 
     saveSession() {
         if (!this.matchId) return;
-        const myName = document.getElementById('playerName').value.trim();
+        const myName = getProfileName();
         // Session storage is tab-specific, allowing multi-local testing
         sessionStorage.setItem('hexbound_session', JSON.stringify({
             matchId: this.matchId,
@@ -2623,13 +2704,6 @@ class GameSync {
     }
 
     async init() {
-        // Load saved player name ONLY if current input is still default/empty
-        const savedName = localStorage.getItem('hexbound_playername');
-        const currentInput = document.getElementById('playerName').value.trim();
-        if (savedName && (currentInput === "" || currentInput === "Human")) {
-            document.getElementById('playerName').value = savedName;
-        }
-
         if (this.db) return true; // Already initialized
 
         try {
@@ -2651,16 +2725,15 @@ class GameSync {
             this.db = firebase.firestore();
             return true;
         } catch (e) {
-            console.error("Firebase init failed:", e);
             return false;
         }
     }
 
-    async joinMatch(id, onUpdate) {
+    async joinMatch(id, onUpdate, mustExist = false) {
         this.matchId = id;
         this.gameRef = this.db.collection('matches').doc(id);
         this.isMultiplayer = true;
-        let myName = document.getElementById('playerName').value.trim() || "Guest";
+        let myName = getProfileName();
         localStorage.setItem('hexbound_playername', myName);
         
         try {
@@ -2669,13 +2742,20 @@ class GameSync {
                 const session = this.getSession();
                 
                 if (!doc.exists) {
+                    if (mustExist) throw new Error("Match not found. Please check your Match ID.");
+
                     this.isHost = true;
                     this.localPlayerId = 0;
                     
                     const colors = ['#0099ff', '#ff4444', '#ffcc00', '#ffffff', '#e67e22', '#9b59b6'];
+
+                    const br = parseInt(document.getElementById('boardSizeHost').value) || 2;
+                    const wp = parseInt(document.getElementById('winPointsHost').value) || 10;
+                    const fr = document.getElementById('friendlyRobberHost').checked;
+
                     const p0 = new Player(0, myName, colors[0], false);
-                    const initialBoard = new Board(2);
-                    const initialGs = new GameState(initialBoard, [p0], 10);
+                    const initialBoard = new Board(br);
+                    const initialGs = new GameState(initialBoard, [p0], wp, fr, "Skilled");
                     transaction.set(this.gameRef, initialGs.toJSON());
                 } else {
                     const data = doc.data();
@@ -2694,16 +2774,17 @@ class GameSync {
                             let baseName = myName;
                             while (tempGs.players.some(p => p.name === `${baseName} (${count})`)) count++;
                             myName = `${baseName} (${count})`;
-                            document.getElementById('playerName').value = myName;
+                            // Note: we can't easily sync back to the join UI here but we save it to storage
                             localStorage.setItem('hexbound_playername', myName);
                         }
 
                         let idx = tempGs.players.findIndex(p => p.name === myName);
                         if (idx === -1) {
-                            idx = tempGs.players.findIndex(p => p.isBot);
+                            // Online games don't have bots anymore, but we'll leave the takeover logic just in case an AI slot was somehow created
+                            idx = tempGs.players.findIndex(p => p.name.startsWith("Guest ") || p.name.startsWith("Player "));
                             if (idx !== -1) {
                                 tempGs.players[idx].name = myName;
-                                tempGs.players[idx].isBot = false;
+                                if (tempGs.players[idx].isBot) tempGs.players[idx].isBot = false;
                             } else if (tempGs.players.length < 6) {
                                 idx = tempGs.players.length;
                                 const colors = ['#0099ff', '#ff4444', '#ffcc00', '#ffffff', '#e67e22', '#9b59b6'];
@@ -2722,24 +2803,29 @@ class GameSync {
             document.getElementById('syncStatus').innerText = `${this.isHost ? 'Host' : 'Joined'}: Match ${id}`;
             document.getElementById('syncStatus').style.color = this.isHost ? '#2ecc71' : '#3498db';
             
-            const abandonBtn = document.getElementById('abandonBtn');
-            abandonBtn.style.display = 'block';
-            abandonBtn.innerText = this.isHost ? "Abandon Game" : "Leave Game";
+            // Online games are humans-only: disable bot settings
+            document.getElementById('aiCount').value = "0";
+            document.getElementById('aiCount').disabled = true;
+            document.getElementById('onlyBots').checked = false;
+            document.getElementById('onlyBots').disabled = true;
+            document.getElementById('aiDifficulty').disabled = true;
+
+            const lobbyAbandonBtn = document.getElementById('lobbyAbandonBtn');
+            lobbyAbandonBtn.style.display = 'block';
+            lobbyAbandonBtn.innerText = this.isHost ? "Abandon Game" : "Leave Game";
 
             if (!this.isHost) {
                 startGameBtn.style.display = 'none';
-                document.getElementById('menu-overlay').querySelector('h1').innerText = "Waiting for Host...";
+                document.getElementById('menuTitle').innerText = "Waiting for Host...";
             } else {
                 startGameBtn.style.display = 'block';
-                document.getElementById('menu-overlay').querySelector('h1').innerText = "Match Lobby";
+                document.getElementById('menuTitle').innerText = "Match Lobby";
             }
 
             const finalDoc = await this.gameRef.get();
             if (finalDoc.exists) onUpdate(GameState.fromJSON(finalDoc.data()));
 
         } catch (e) {
-            console.error("Join Failed:", e);
-            alert(e.message || "Failed to join match.");
             throw e;
         }
 
@@ -2749,17 +2835,27 @@ class GameSync {
                 const data = snap.data();
                 if (this.lastPushedJson && JSON.stringify(data) === this.lastPushedJson) return;
                 onUpdate(GameState.fromJSON(data));
-            } else if (this.isMultiplayer && !this.isHost && gs) {
+            } else if (this.isMultiplayer && !this.isHost) {
+                // The host has deleted the match
                 this.abandonMatch(true); 
-                alert("The host has abandoned the game.");
+                showToast("The host has abandoned the game.", "warning");
+                
+                // Full UI Reset
                 gs = null;
                 gameInterface.style.display = 'none';
                 menuOverlay.style.display = 'flex';
-                const syncBtn = document.getElementById('joinMatchBtn');
-                syncBtn.innerText = "SYNC";
-                syncBtn.disabled = false;
+                
+                // Reset Lobby UI
+                const syncBtn = document.getElementById('joinConfirmBtn');
+                if (syncBtn) {
+                  syncBtn.innerText = "Join Game";
+                  syncBtn.disabled = false;
+                }
                 document.getElementById('syncStatus').innerText = "Not synced.";
                 document.getElementById('syncStatus').style.color = "#999";
+                document.getElementById('playerCountDisplay').style.display = 'none';
+                document.getElementById('menuTitle').innerText = "HEXBOUND";
+                startGameBtn.style.display = 'block';
             }
         });
         return true;
@@ -2797,7 +2893,7 @@ class GameSync {
             await this.gameRef.set(data);
             this.pendingUpdate = null;
         } catch (e) {
-            console.error("Firebase update failed:", e);
+            showToast("Sync failed. Check connection.", "error");
         }
     }
 
@@ -2814,17 +2910,16 @@ class GameSync {
             try {
                 // If it's a "clean" abandon by host, delete the match entirely
                 await this.gameRef.delete();
-                console.log("Match deleted from Firebase (Host abandoned)");
             } catch (e) {
-                console.error("Failed to delete match:", e);
+                showToast("Failed to end game on server.", "error");
             }
         } else if (gs && !skipSync) {
-            // Revert ourselves to a bot before leaving, ONLY if we aren't being forced out by a deletion
+            // Player is leaving an online game.
+            // Since we aren't allowing bots, we just log that they left.
             const me = gs.players[this.localPlayerId];
-            const oldName = me.name;
-            me.isBot = true;
-            me.name = `AI ${this.localPlayerId}`;
-            gs.log(`${oldName} left. Replaced by AI.`);
+            gs.log(`${me.name} left the game.`);
+            // Note: In a humans-only game, the turn will likely be stuck if they leave during it.
+            // But this satisfies the "no bots" requirement.
             await this.update(gs, true);
         }
 
@@ -2835,16 +2930,61 @@ class GameSync {
         this.isMultiplayer = false;
         this.isHost = true;
         this.lastPushedJson = null;
+
+        // Re-enable bot settings for local games
+        document.getElementById('aiCount').disabled = false;
+        document.getElementById('onlyBots').disabled = false;
+        document.getElementById('aiDifficulty').disabled = false;
     }
 }
 
 const gameSync = new GameSync();
 
+function getProfileName() {
+    // Check which menu is visible and grab name from there, or fall back to any non-empty input
+    const solo = document.getElementById('playerNameSolo').value.trim();
+    const host = document.getElementById('playerNameHost').value.trim();
+    const join = document.getElementById('playerNameJoin').value.trim();
+
+    if (singleplayerMenu.style.display !== 'none') return solo || "Human";
+    if (hostMenu.style.display !== 'none') return host || "Host";
+    if (joinMenu.style.display !== 'none') return join || "Guest";
+    
+    // Fallback if none of the specific menus are active
+    return solo || host || join || localStorage.getItem('hexbound_playername') || "Human";
+}
+
+// Initial Name Population
+(function () {
+    const savedName = localStorage.getItem('hexbound_playername');
+    if (savedName) {
+        ['playerNameSolo', 'playerNameHost', 'playerNameJoin'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.value = savedName;
+        });
+    }
+    
+    // Sync all name fields when one changes
+    const syncNames = (e) => {
+        const newName = e.target.value;
+        ['playerNameSolo', 'playerNameHost', 'playerNameJoin'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.value = newName;
+        });
+        localStorage.setItem('hexbound_playername', newName);
+    };
+
+    ['playerNameSolo', 'playerNameHost', 'playerNameJoin'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.oninput = syncNames;
+    });
+})();
+
 function resetGame(config) {
   lastGameConfig = config;
   isOnlyBotsMode = config.onlyBots;
   const { aiCount, boardRadius, winPoints, friendlyRobber, aiDifficulty, onlyBots } = config;
-  const myName = document.getElementById('playerName').value.trim() || "Human";
+  const myName = getProfileName();
   localStorage.setItem('hexbound_playername', myName);
   
   gameSync.saveSession();
@@ -2856,9 +2996,9 @@ function resetGame(config) {
   const colors = ['#0099ff', '#ff4444', '#ffcc00', '#ffffff', '#e67e22', '#9b59b6'];
   let players = [];
   
-  if (onlyBots) {
+  if (onlyBots && !gameSync.isMultiplayer) {
     for (let i = 0; i <= aiCount; i++) {
-        players.push(new Player(i, `Bot ${i}`, colors[i % colors.length], true));
+        players.push(new Player(i, `AI ${i}`, colors[i % colors.length], true));
     }
   } else {
     // Preserve existing human players in lobby
@@ -2874,10 +3014,12 @@ function resetGame(config) {
         }
     }
 
-    // Append AI bots up to aiCount
-    for (let i = 0; i < aiCount; i++) {
-        const nextIdx = players.length;
-        players.push(new Player(nextIdx, `AI ${nextIdx}`, colors[nextIdx % colors.length], true));
+    // Append AI bots up to aiCount (Only for solo games)
+    if (!gameSync.isMultiplayer) {
+      for (let i = 0; i < aiCount; i++) {
+          const nextIdx = players.length;
+          players.push(new Player(nextIdx, `AI ${nextIdx}`, colors[nextIdx % colors.length], true));
+      }
     }
   }
 
@@ -2885,6 +3027,7 @@ function resetGame(config) {
   players.forEach((p, idx) => p.id = idx);
 
   gs = new GameState(board, players, winPoints, friendlyRobber, aiDifficulty);
+  gs.started = true;
   ren = new CanvasRenderer(canvas, board);
   inp = new InputHandler(canvas, board, gs, ren);
   setupTradeUI();
@@ -2899,104 +3042,183 @@ function resetGame(config) {
   }
 }
 
-// --- Game Execution ---
+// --- BUTTON CLICK HANDLERS ---
+
+// Navigation
+const navBtns = {
+    'showSingleplayerBtn': singleplayerMenu,
+    'showMultiplayerBtn': multiplayerMenu,
+    'showHostMenuBtn': hostMenu,
+    'showJoinMenuBtn': joinMenu
+};
+
+Object.entries(navBtns).forEach(([id, screen]) => {
+    const btn = document.getElementById(id);
+    if (btn) btn.onclick = () => showScreen(screen);
+});
+
+// Back buttons
+document.querySelectorAll('.back-btn').forEach(btn => {
+    btn.onclick = async () => {
+        const currentId = btn.closest('.menu-card').id;
+        if (currentId === 'singleplayer-menu' || currentId === 'multiplayer-choice-menu') {
+            showScreen(mainMenu);
+        } else if (currentId === 'host-menu' || currentId === 'join-menu') {
+            showScreen(multiplayerMenu);
+        } else if (currentId === 'lobby-menu') {
+            if (confirm("Leave this lobby?")) {
+                await gameSync.abandonMatch();
+                showScreen(multiplayerMenu);
+            }
+        }
+    };
+});
+
+const startSoloBtn = document.getElementById('startSoloBtn');
+if (startSoloBtn) {
+    startSoloBtn.onclick = () => {
+        const config = {
+            aiCount: parseInt(document.getElementById('aiCount').value),
+            boardRadius: parseInt(document.getElementById('boardSizeSolo').value),
+            winPoints: parseInt(document.getElementById('winPointsSolo').value),
+            friendlyRobber: document.getElementById('friendlyRobberSolo').checked,
+            aiDifficulty: document.getElementById('aiDifficulty').value,
+            onlyBots: document.getElementById('onlyBots').checked
+        };
+
+        const myName = document.getElementById('playerNameSolo').value.trim() || "Human";
+        gameSync.isMultiplayer = false; 
+        gameSync.isHost = true;
+        gameSync.matchId = null;
+
+        resetGame(config);
+    };
+}
+
+const createMatchBtn = document.getElementById('createMatchBtn');
+if (createMatchBtn) {
+    createMatchBtn.onclick = async () => {
+    const mid = document.getElementById('matchIdHost').value.trim();
+    if (!mid) {
+        showToast("Please enter a Match ID", "error");
+        return;
+    }
+    
+    const ok = await gameSync.init();
+    if (!ok) {
+        showToast("Firebase connection failed.", "error");
+        return;
+    }
+
+    try {
+        await gameSync.joinMatch(mid, (remoteGs) => {
+            if (menuOverlay.style.display !== 'none') {
+                showScreen(lobbyMenu);
+                document.getElementById('lobbyMatchId').innerText = `Lobby: ${mid}`;
+                const countEl = document.getElementById('playerCountDisplay');
+                const humanCount = remoteGs.players.filter(p => p && !p.isBot).length;
+                countEl.innerText = `${humanCount} Player${humanCount !== 1 ? 's' : ''} Connected`;
+                countEl.style.display = 'block';
+                
+                // Guests don't see Start Game button
+                startGameBtn.style.display = gameSync.isHost ? 'block' : 'none';
+            }
+
+            if (!gs) {
+                gs = remoteGs;
+                ren = new CanvasRenderer(canvas, gs.board);
+                inp = new InputHandler(canvas, gs.board, gs, ren);
+                setupTradeUI();
+                if (gs.started) {
+                    menuOverlay.style.display = 'none';
+                    gameInterface.style.display = 'block';
+                    resize();
+                }
+            } else {
+                gs.fromJSON(remoteGs.toJSON());
+                if (gs.started && menuOverlay.style.display !== 'none') {
+                    menuOverlay.style.display = 'none';
+                    gameInterface.style.display = 'block';
+                    resize();
+                }
+            }
+        });
+    } catch (e) {
+        showToast(e.message, "error");
+    }
+    };
+}
+
+document.getElementById('joinConfirmBtn').onclick = async () => {
+    const mid = document.getElementById('matchIdJoin').value.trim();
+    if (!mid) {
+        showToast("Please enter a Match ID", "error");
+        return;
+    }
+    
+    const ok = await gameSync.init();
+    if (!ok) {
+        showToast("Firebase connection failed.", "error");
+        return;
+    }
+
+    try {
+        // Use the mustExist flag here
+        await gameSync.joinMatch(mid, (remoteGs) => {
+            if (menuOverlay.style.display !== 'none') {
+                showScreen(lobbyMenu);
+                document.getElementById('lobbyMatchId').innerText = `Lobby: ${mid}`;
+                const countEl = document.getElementById('playerCountDisplay');
+                const humanCount = remoteGs.players.filter(p => p && !p.isBot).length;
+                countEl.innerText = `${humanCount} Player${humanCount !== 1 ? 's' : ''} Connected`;
+                countEl.style.display = 'block';
+
+                // Guests don't see Start Game button
+                startGameBtn.style.display = gameSync.isHost ? 'block' : 'none';
+            }
+
+            if (!gs) {
+                gs = remoteGs;
+                ren = new CanvasRenderer(canvas, gs.board);
+                inp = new InputHandler(canvas, gs.board, gs, ren);
+                setupTradeUI();
+                if (gs.started) {
+                    menuOverlay.style.display = 'none';
+                    gameInterface.style.display = 'block';
+                    resize();
+                }
+            } else {
+                gs.fromJSON(remoteGs.toJSON());
+                if (gs.started && menuOverlay.style.display !== 'none') {
+                    menuOverlay.style.display = 'none';
+                    gameInterface.style.display = 'block';
+                    resize();
+                }
+            }
+        }, true);
+    } catch (e) {
+        showToast(e.message, "error");
+    }
+};
 
 startGameBtn.onclick = async () => {
   const config = {
-    aiCount: parseInt(document.getElementById('aiCount').value),
-    boardRadius: parseInt(document.getElementById('boardSize').value),
-    winPoints: parseInt(document.getElementById('winPoints').value),
-    friendlyRobber: document.getElementById('friendlyRobber').checked,
-    aiDifficulty: document.getElementById('aiDifficulty').value,
-    onlyBots: document.getElementById('onlyBots').checked
+    aiCount: 0,
+    boardRadius: parseInt(document.getElementById('boardSizeHost').value),
+    winPoints: parseInt(document.getElementById('winPointsHost').value),
+    friendlyRobber: document.getElementById('friendlyRobberHost').checked,
+    aiDifficulty: 'Skilled',
+    onlyBots: false
   };
 
-  // Warning for 0 AIs if not synced
-  if (config.aiCount === 0 && !gameSync.matchId) {
-      alert("0 AI mode is for multiplayer testing only. To play solo, please add at least 1 AI opponent.");
+  if (!gameSync.isHost) {
+      showToast("Only the host can start the game.", "error");
       return;
   }
   
-  // If we aren't already synced, this is a local solo-only game
-  if (!gameSync.matchId) {
-    gameSync.isMultiplayer = false; 
-    gameSync.isHost = true;
-  } else {
-      // We are already synced, maintain our host status
-      if (!gameSync.isHost) {
-          alert("Only the host can start the game.");
-          return;
-      }
-      gameSync.isMultiplayer = true;
-  }
-
+  gameSync.isMultiplayer = true;
   resetGame(config);
-  if (gameSync.isMultiplayer) await gameSync.update(gs);
-};
-
-document.getElementById('joinMatchBtn').onclick = async () => {
-  const mid = document.getElementById('matchId').value.trim();
-  if (!mid) {
-      alert("Please enter a Match ID");
-      return;
-  }
-  
-  const ok = await gameSync.init();
-  if (!ok) {
-      alert("Failed to initialize Firebase. check your firebase-config.json and SDK imports.");
-      return;
-  }
-
-  const btn = document.getElementById('joinMatchBtn');
-  btn.innerText = "Connecting...";
-  btn.disabled = true;
-
-  try {
-      await gameSync.joinMatch(mid, (remoteGs) => {
-          if (!gs) {
-              // Initial load of a shared game
-              gs = remoteGs;
-              ren = new CanvasRenderer(canvas, gs.board);
-              inp = new InputHandler(canvas, gs.board, gs, ren);
-              setupTradeUI();
-              menuOverlay.style.display = 'none';
-              gameInterface.style.display = 'block';
-              resize();
-          } else {
-              // Update existing game state
-              gs.fromJSON(remoteGs.toJSON());
-          }
-      });
-
-      // If we are the first one, we might need to "host" a game state
-      // We'll check if the snapshot was empty or if we need to push a new one
-      // For simplicity, if we clicked SYNC and its still the menu, we'll start a default game and push it
-      if (menuOverlay.style.display !== 'none' && gameSync.isHost) {
-          const aiCountStr = document.getElementById('aiCount').value;
-          const boardSizeStr = document.getElementById('boardSize').value;
-          const winPointsStr = document.getElementById('winPoints').value;
-          
-          const config = {
-              aiCount: (aiCountStr !== "") ? parseInt(aiCountStr) : 1,
-              boardRadius: (boardSizeStr !== "") ? parseInt(boardSizeStr) : 3,
-              winPoints: (winPointsStr !== "") ? parseInt(winPointsStr) : 10,
-              friendlyRobber: document.getElementById('friendlyRobber').checked,
-              aiDifficulty: document.getElementById('aiDifficulty').value,
-              onlyBots: false
-          };
-          resetGame(config);
-          await gameSync.update(gs);
-      } else if (menuOverlay.style.display !== 'none' && !gameSync.isHost) {
-          // If we are NOT the host, we should wait for the host's data to arrive via onSnapshot
-          btn.innerText = "Waiting for Host...";
-          btn.disabled = true;
-      }
-  } catch (err) {
-      console.error(err);
-      alert("Error syncing match: " + err.message);
-      btn.innerText = "SYNC";
-      btn.disabled = false;
-  }
+  await gameSync.update(gs);
 };
 
 document.getElementById('replayBtn').onclick = () => {
@@ -3005,26 +3227,28 @@ document.getElementById('replayBtn').onclick = () => {
   }
 };
 
+
 document.getElementById('newGameBtn').onclick = () => {
-  gs = null; // Stop the loop/game logic
+  gs = null;
   gameInterface.style.display = 'none';
   menuOverlay.style.display = 'flex';
+  showScreen(mainMenu);
 };
 
-document.getElementById('abandonBtn').onclick = async () => {
-  if (confirm(gameSync.isHost ? "Are you sure? This will end the game for everyone!" : "Are you sure you want to leave?")) {
-      await gameSync.abandonMatch();
-      gs = null;
-      gameInterface.style.display = 'none';
-      menuOverlay.style.display = 'flex';
-      // Reset Join UI state
-      const syncBtn = document.getElementById('joinMatchBtn');
-      syncBtn.innerText = "SYNC";
-      syncBtn.disabled = false;
-      document.getElementById('syncStatus').innerText = "Not synced.";
-      document.getElementById('syncStatus').style.color = "#999";
-  }
+const handleAbandon = async () => {
+    if (confirm(gameSync.isHost ? "Are you sure? This will end the game for everyone!" : "Are you sure you want to leave?")) {
+        await gameSync.abandonMatch();
+        gs = null;
+        gameInterface.style.display = 'none';
+        menuOverlay.style.display = 'flex';
+        showScreen(mainMenu);
+    }
 };
+
+document.getElementById('lobbyAbandonBtn').onclick = handleAbandon;
+document.getElementById('gameAbandonBtn').onclick = handleAbandon;
+
+// --- Game Execution ---
 
 rollBtn.onclick = async () => { 
   if(gs && !gs.currentPlayer.isBot && !gs.hasRolled && !gs.movingRobber) {
@@ -3074,9 +3298,15 @@ window.addEventListener('beforeunload', (e) => {
     if (!ok) return;
 
     // Simulate clicking the SYNC button
-    document.getElementById('matchId').value = session.matchId;
-    document.getElementById('playerName').value = session.playerName;
-    document.getElementById('joinMatchBtn').onclick();
+    const mIdInput = document.getElementById('matchIdJoin');
+    const pNameInput = document.getElementById('playerNameJoin');
+    const joinBtn = document.getElementById('joinConfirmBtn');
+
+    if (mIdInput && pNameInput && joinBtn) {
+        mIdInput.value = session.matchId;
+        pNameInput.value = session.playerName;
+        joinBtn.onclick();
+    }
 })();
 
 function loop() {
@@ -3107,6 +3337,13 @@ function loop() {
   playerTradePanel.style.display = (gs.phase === 'PLAY' && isHumanTurn && !inRobberActions && !inDiscardActions && isProposingTrade && !isWinning) ? 'flex' : 'none';
   robberPanel.style.display = (gs.phase === 'PLAY' && isHumanTurn && gs.waitingToPickVictim && !isWinning) ? 'flex' : 'none';
   const humanInDiscard = gs.waitingForDiscards.includes(gameSync.localPlayerId) && !isOnlyBotsMode;
+  if (humanInDiscard && discardPanel.style.display === 'none' && !isWinning) {
+      const p = gs.players[gameSync.localPlayerId];
+      if (p) {
+        const tr = Object.values(p.resources).reduce((a, b) => a + b, 0);
+        if (tr > 0) setupDiscardUI(Math.ceil(tr / 2));
+      }
+  }
   discardPanel.style.display = (humanInDiscard && !isWinning) ? 'flex' : 'none';
   
   if (isWinning) {

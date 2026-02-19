@@ -5,12 +5,16 @@ HexBound is a browser-based, high-performance strategy game and simulation engin
 ## 🚀 Quick Start
 
 1.  Open [index.html](index.html) in any modern web browser.
-2.  Configure your session in the **Start Menu**:
+2.  Choose your game mode from the **Main Menu**:
+    *   **Singleplayer**: Quick-start a local match against AIs.
+    *   **Multiplayer**: Host or join a real-time online match.
+3.  Configure your session in the **Setup Menu**:
     *   **AI Opponents**: Play with up to 5 AI players (6 players total).
     *   **Board Size**: Small (7 hexes), Standard (19 hexes), or Large (37 hexes).
     *   **AI Difficulty**: Choose from **Beginner** (Slow/Random), **Skilled** (Balanced), or **Master** (Aggressive/Strategic).
-    *   **Only Bots Mode**: Toggle this to watch a fully automated simulation with a 5-second auto-restart loop.
-3.  Click **Start Game** to begin the match.
+    *   **Only Bots Mode (Auto-Battle)**: Toggle this to watch a fully automated simulation.
+    *   **Friendly Robber (Safe at 2 pts)**: Protect new players from being robbed early.
+4.  Click **Start Game** to begin the match.
 
 ## 🎮 Controls
 
@@ -20,14 +24,15 @@ HexBound is a browser-based, high-performance strategy game and simulation engin
 *   **🎲 Actions**: Use the control bar to **Roll Dice**, **End Turn**, or perform **Trades**.
 *   **✨ Dice Visuals**: Experience a high-polish dice system with a centralized animation that follows a **Roll, Grow, Pause, and Fade** sequence for maximum clarity.
 
-## � Multiplayer (Online Sync)
+## 🌐 Multiplayer (Online Sync)
 
-HexBound now supports **Real-Time Multiplayer** across different browsers using Google Firebase. 
+HexBound supports **Real-Time Multiplayer** across different browsers using Google Firebase. 
 
 ### 1. Connecting
-*   **Host a Match**: Enter a unique **Match ID** in the menu and click **SYNC**. Since you are the first one there, you become the **Host**. Configure your game settings and click **Start Game**.
-*   **Join a Match**: Enter the same **Match ID** provided by the host and click **SYNC**. You will see "Waiting for Host..." until the game is initialized.
-*   **Abandon Game**: Use the red **Abandon** button to leave a match. If the Host abandons, the match data is deleted from the server and all guests are returned to the menu.
+*   **Host a Match**: Select **Multiplayer** -> **Host Game**. Enter your character name, a unique **Match ID** (e.g., `cool-room-123`), and configure the board settings. Once in the **Lobby**, wait for players to join and then click **Start Game**.
+*   **Join a Match**: Select **Multiplayer** -> **Join Game**. Enter your character name and the exact match code from the host. You'll be connected to the lobby instantly.
+*   **Persistent Names**: Your preferred username is saved and synchronized across all menus automatically.
+*   **Abandon Game**: If the Host abandons, the match is deleted from the server and all guests are returned to the menu. 
 
 ### 2. Synchronization Architecture
 *   **Authority Model**: To prevent desync, all **AI logic** and **Dice rolls** are calculated on the Host's machine and pushed to the Guest.
@@ -75,18 +80,18 @@ HexBound now supports **Real-Time Multiplayer** across different browsers using 
 
 ## ✨ Advanced Features
 
+*   **Integrated Logo Branding**: The main menu and in-game HUD now feature official branding from the `assets/` folder.
+*   **Toast Notification System**: Replaced intrusive alerts and technical console errors with a clean, animated toast notification system for game status and error reporting.
+*   **Fixed Resource Ordering**: Resources in the Action Panel and Bank Stock are always sorted by type (Wood, Brick, Sheep, Wheat, Ore) for better muscle memory.
+*   **Mobile-First Safe Area Support**: Added `env(safe-area-inset-bottom)` support to ensure UI controls never collide with Android navigation buttons or iOS home bars.
+*   **Sync-Ready Usernames**: Names typed in any menu field are automatically saved to `localStorage` and synced across all setup screens.
 *   **Fixed Centered Modals**: A reconstructed UI ensures all trade, discard, and robber menus are centered and accessible on any device.
 *   **Victory Screen**: Once a player reaches the target score, a dedicated victory panel appears with options to **Replay** (same settings) or start a **New Game**.
-*   **Concurrency Control**: A `turnToken` system ensures that delayed AI actions never bleed into human turns, providing a glitch-free turn-based experience.
-*   **Visual Dimming**: The game board automatically dims when a modal is active, keeping focus on vital decisions while keeping the HUD visible.
-*   **Interactive Rules**: A toggleable, scrolling rules panel built directly into the UI for quick reference during play.
-*   **Dynamic Backgrounds**: The sea buffer dynamically adjusts based on board size to prevent clipping of ports and border tiles.
-*   **Online Status Indicator**: A real-time connectivity dot and Match ID display located in the Action Panel for easy reference.
 
 ## 🛠 Technical Overview
 
-*   **Engine**: Custom logic engine built with zero dependencies.
-*   **Backend**: Firebase Firestore for real-time state synchronization.
+*   **Monolithic Engine**: The core game logic and canvas rendering have been consolidated into a single, high-performance `main.js` file to support `file://` execution without CORS issues.
+*   **Core Backend**: Firebase Firestore for real-time state synchronization.
 *   **Language**: Vanilla JavaScript (ES6+), HTML5 Canvas, CSS Flexbox/Grid.
 *   **Coordinates**: Axial $(q, r)$ math for grid operations.
 *   **Rendering**: Camera system supporting infinite panning and 0.3x to 3.0x zoom.
