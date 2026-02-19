@@ -1586,7 +1586,8 @@ class GameState {
                 const allBots = this.players.every(pl => pl.isBot);
                 if (allBots) {
                     this.log(`Game Over! Restarting in 5s...`);
-                    setTimeout(() => startGameBtn.onclick(), 5000);
+                    // Use the replay button's logic which preserves the Only Bots settings
+                    setTimeout(() => document.getElementById('replayBtn').click(), 5000);
                 }
             }
         }
@@ -1639,10 +1640,10 @@ class CanvasRenderer {
     this.ctx.translate(this.canvas.width/2 + this.camera.x, this.canvas.height/2 + this.camera.y);
     this.ctx.scale(this.camera.zoom, this.camera.zoom);
 
-    // Draw Sea Background (Scales with board size: +0.5 buffer per radius increment)
-    const seaBuffer = 1.0 + (this.board.radius * 0.5);
-    const seaSize = (this.board.radius + seaBuffer) * this.board.hexSize * 1.5;
-    this.drawPoly(0, 0, 6, seaSize, HEX_TYPES.WATER.color, false);
+    // Draw Sea Background (Scales with board size: +3.0 hexes beyond the furthest vertex)
+    // Rotated by 30 degrees (PI/6) to match the pointy-topped silhouette of the hex grid
+    const seaSize = (this.board.radius * Math.sqrt(3) + 3.0) * this.board.hexSize;
+    this.drawPoly(0, 0, 6, seaSize, HEX_TYPES.WATER.color, false, Math.PI / 6);
 
     this.board.hexes.forEach((h, id) => {
       const p = this.board.hexToPixel(h.q, h.r);
@@ -1737,17 +1738,20 @@ class CanvasRenderer {
       const v2 = this.board.getVertex(port.v2);
       const cx = (v1.x + v2.x) / 2, cy = (v1.y + v2.y) / 2;
       const angle = Math.atan2(cy, cx);
-      const ox = Math.cos(angle) * 28, oy = Math.sin(angle) * 28;
+      
+      // Fixed offset of 40 pixels from the board edge
+      const px = cx + Math.cos(angle) * 40;
+      const py = cy + Math.sin(angle) * 40;
 
       this.ctx.strokeStyle = 'rgba(255,255,255,0.6)'; this.ctx.lineWidth = 4;
-      this.ctx.beginPath(); this.ctx.moveTo(v1.x, v1.y); this.ctx.lineTo(cx + ox, cy + oy); this.ctx.lineTo(v2.x, v2.y); this.ctx.stroke();
+      this.ctx.beginPath(); this.ctx.moveTo(v1.x, v1.y); this.ctx.lineTo(px, py); this.ctx.lineTo(v2.x, v2.y); this.ctx.stroke();
 
       this.ctx.fillStyle = (port.type === 'ALL') ? '#fff' : (HEX_TYPES[port.type]?.color || '#fff');
-      this.ctx.beginPath(); this.ctx.arc(cx + ox, cy + oy, 8, 0, Math.PI * 2); this.ctx.fill();
+      this.ctx.beginPath(); this.ctx.arc(px, py, 8, 0, Math.PI * 2); this.ctx.fill();
       this.ctx.strokeStyle = '#000'; this.ctx.lineWidth = 1; this.ctx.stroke();
       
       this.ctx.fillStyle = '#000'; this.ctx.font = 'bold 8px Arial'; this.ctx.textAlign = 'center'; this.ctx.textBaseline = 'middle';
-      this.ctx.fillText(port.type === 'ALL' ? '3:1' : '2:1', cx + ox, cy + oy);
+      this.ctx.fillText(port.type === 'ALL' ? '3:1' : '2:1', px, py);
     });
 
     this.board.vertices.forEach(v => {
@@ -1826,9 +1830,9 @@ class CanvasRenderer {
         this.ctx.globalAlpha = 1.0;
     }
   }
-  drawPoly(x,y,s,sz,c,h) {
+  drawPoly(x,y,s,sz,c,h, rotation = 0) {
     this.ctx.fillStyle=c; this.ctx.strokeStyle=h?'yellow':'#000'; this.ctx.lineWidth=h?4:2;
-    this.ctx.beginPath(); for(let i=0;i<s;i++){const a=2*Math.PI*i/s; this.ctx.lineTo(x+sz*Math.cos(a), y+sz*Math.sin(a));} this.ctx.closePath(); this.ctx.fill(); this.ctx.stroke();
+    this.ctx.beginPath(); for(let i=0;i<s;i++){const a=rotation + 2*Math.PI*i/s; this.ctx.lineTo(x+sz*Math.cos(a), y+sz*Math.sin(a));} this.ctx.closePath(); this.ctx.fill(); this.ctx.stroke();
   }
   drawDice(x, y, value, size = 35) {
     this.drawDiceToCtx(this.ctx, x, y, value, size);
@@ -3484,7 +3488,8 @@ function loop() {
 
   // Handle Player Trade Panel visibility
   if (gs.activeTrade && !isWinning) {
-      const isTargetLocalHuman = gs.activeTrade.targetId === gameSync.localPlayerId;
+      // In Only Bots mode, we should never show human trade UI
+      const isTargetLocalHuman = gs.activeTrade.targetId === gameSync.localPlayerId && !isOnlyBotsMode;
       if (isTargetLocalHuman && !inDiscardActions) {
           tradeOfferPanel.style.display = 'flex';
           document.getElementById('trade-offer-player').innerText = `${gs.players[gs.activeTrade.senderId].name} wants to trade!`;
