@@ -1,6 +1,6 @@
 # [HexBound - Hex-Grid Strategy Simulation](https://remagofficial.github.io/HexBound-web/)
 
-HexBound is a browser-based, high-performance strategy game and simulation engine inspired by classic hex-grid board games. Built using vanilla JavaScript and HTML5 Canvas, it features a robust AI system, dynamic board generation, and a fully automated "Only Bots" mode for theoretical game analysis.
+Hexbound is a browser-based, high-performance strategy game and simulation engine inspired by classic hex-grid board games. Built using vanilla JavaScript and HTML5 Canvas, it features a robust AI system, dynamic board generation, and a fully automated "Only Bots" mode for theoretical game analysis. All game results are permanently archived in your browser's **Vault of Records**.
 
 ## 🚀 Quick Start
 
@@ -49,6 +49,23 @@ The board begins at a tiny radius of **2** and expands outward every few rotatio
 ### 4. End-Game Visualization
 For both singleplayer and multiplayer matches, a **Desertification Trend Graph** is displayed on the victory screen, tracking the world's decline from the first rotation to the final turn. Guests in synchronized matches will see the same trend data as the host.
 
+## 📊 Vault of Records (Stats Tracking)
+
+HexBound features a comprehensive, persistent career tracking system stored locally in your browser. Access it via the **Game Stats** button on the main menu.
+
+### 1. Unified Career Tracking
+The **Vault of Records** automatically captures data from every completed game, including:
+*   **Performance Metrics**: Total Games, Wins, Losses, and Win Rate.
+*   **Infrastructure Stats**: Total number of **Settlements**, **Cities**, and **Roads** built.
+*   **Strategic Stats**: Number of **Development Cards** used across your career.
+*   **Efficiency**: Average **Turns per Game** and **Average Victory Points** achieved.
+
+### 2. Breakdown Sections
+The dashboard is split into 5 categories to help you analyze your playstyle:
+*   **All Modes**: Your total career lifetime stats.
+*   **Singleplayer vs Multiplayer**: Compare your dominance against AI bots vs real human opponents.
+*   **Standard vs Expanding Board**: Track separate records for classic games and Expanding Board survival matches.
+
 ## 🌐 Multiplayer (Online Sync)
 
 HexBound supports **Real-Time Multiplayer** across different browsers using Google Firebase. 
@@ -56,6 +73,7 @@ HexBound supports **Real-Time Multiplayer** across different browsers using Goog
 ### 1. Connecting
 *   **Host a Match**: Select **Multiplayer** -> **Host Game**. Enter your character name, a unique **Match ID** (e.g., `cool-room-123`), and configure the board settings. Once in the **Lobby**, wait for players to join and then click **Start Game**.
 *   **Join a Match**: Select **Multiplayer** -> **Join Game**. Enter your character name and the exact match code from the host. You'll be connected to the lobby instantly.
+*   **Game Browser**: Instead of typing a code, you can use the **Refresh List** button in the Join menu. This displays a list of active public matches, including the **Host's Name**, the **Game Mode**, and the current **Player Count**. To keep the experience efficient, the list only updates when manually refreshed.
 *   **Multiplayer Expansion**: In **Expanding Board** mode, the board grows and rotations are tracked globally. Even if the first player (Host) is eliminated, the board will continue to grow correctly as the turn cycle wraps around.
 *   **Persistent Names**: Your preferred username is saved and synchronized across all menus automatically.
 *   **Abandon Game**: If the Host abandons, the match is deleted from the server and all guests are returned to the menu. 

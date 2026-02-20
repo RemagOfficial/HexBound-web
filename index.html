@@ -184,7 +184,14 @@
             border: 1px solid #7f8c8d;
             min-width: 400px;
             text-align: center;
+            max-height: 90vh;
+            overflow-y: auto;
         }
+
+        .menu-card::-webkit-scrollbar { width: 6px; }
+        .menu-card::-webkit-scrollbar-track { background: transparent; }
+        .menu-card::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 10px; }
+        .menu-card::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.3); }
 
         .menu-card h1 {
             font-size: 36px;
@@ -357,6 +364,20 @@
                 padding: 10px !important;
             }
         }
+        
+        /* Stats Menu Responsive Layout */
+        @media screen and (max-width: 860px) {
+            #stats-menu {
+                width: 95% !important;
+                max-height: 90vh !important;
+            }
+            #stats-content {
+                grid-template-columns: 1fr !important;
+            }
+            #stats-content > div {
+                grid-column: span 1 !important;
+            }
+        }
     </style>
 </head>
 <body style="touch-action: none;">
@@ -365,7 +386,8 @@
         <div id="main-menu" class="menu-card">
             <img src="assets/HexBound_logo.png" alt="HEXBOUND" style="width: 320px; margin-bottom: 20px;">
             <button id="showSingleplayerBtn" style="width: 100%; margin-bottom: 15px; background: #2ecc71;">Singleplayer</button>
-            <button id="showMultiplayerBtn" style="width: 100%; background: #3498db;">Multiplayer</button>
+            <button id="showMultiplayerBtn" style="width: 100%; margin-bottom: 15px; background: #3498db;">Multiplayer</button>
+            <button id="showStatsBtn" style="width: 100%; background: #9b59b6;">Game Stats</button>
         </div>
 
         <!-- Singleplayer Setup -->
@@ -582,7 +604,18 @@
                 <input type="text" id="matchIdJoin" placeholder="Enter code here...">
             </div>
 
-            <button id="joinConfirmBtn" style="width: 100%; background: #3498db;">Join Game</button>
+            <button id="joinConfirmBtn" style="width: 100%; margin-bottom: 25px;">Join Direct</button>
+
+            <!-- Game Browser -->
+            <div style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 15px;">
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
+                    <label style="margin: 0;">Game Browser</label>
+                    <button id="refreshGamesBtn" style="padding: 5px 10px; font-size: 11px; background: #9b59b6;">Refresh List</button>
+                </div>
+                <div id="game-list" style="max-height: 180px; overflow-y: auto; background: rgba(0,0,0,0.2); border-radius: 5px; padding: 5px;">
+                    <p style="color: #666; font-size: 11px; text-align: center; margin: 10px 0;">No active games found.</p>
+                </div>
+            </div>
         </div>
 
         <!-- Match Lobby (Shared for Multi) -->
@@ -595,6 +628,20 @@
             
             <button id="startGameBtn" style="width: 100%; margin-bottom: 10px;">Start Game</button>
             <button id="lobbyAbandonBtn" style="width: 100%; background: #e74c3c;">Leave Lobby</button>
+        </div>
+
+        <!-- Global Stats Menu -->
+        <div id="stats-menu" class="menu-card" style="display: none; width: 850px; max-height: 85vh; overflow-y: auto;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
+                <button class="back-btn" style="padding: 5px 10px; font-size: 12px; background: #7f8c8d;">&larr; Back</button>
+                <h2 style="margin: 0; color: #9b59b6; font-size: 22px;">Vault of Records</h2>
+            </div>
+
+            <div id="stats-content" style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                <!-- Content will be injected by JS -->
+            </div>
+
+            <button id="clearStatsBtn" style="width: 100%; margin-top: 25px; background: #e74c3c; font-size: 11px; padding: 10px;">Purge All Records</button>
         </div>
     </div>
 

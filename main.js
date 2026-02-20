@@ -31,6 +31,121 @@ const DEV_CARD_TYPES = {
   VP: { name: 'Victory Point', desc: 'Adds 1 to your victory points.' }
 };
 
+// --- STATISTICS ---
+const STATS_KEY = "hexbound_global_stats";
+const DEFAULT_SECTION = { games: 0, wins: 0, losses: 0, turns: 0, vp: 0, settlements: 0, cities: 0, roads: 0, devCards: 0 };
+const DEFAULT_STATS = {
+    total: { ...DEFAULT_SECTION },
+    standard: { ...DEFAULT_SECTION },
+    expanding: { ...DEFAULT_SECTION },
+    singleplayer: { ...DEFAULT_SECTION },
+    multiplayer: { ...DEFAULT_SECTION }
+};
+
+let recordedGameId = null;
+
+function loadStats() {
+    const data = localStorage.getItem(STATS_KEY);
+    const defaults = JSON.parse(JSON.stringify(DEFAULT_STATS));
+    if (!data) return defaults;
+    try {
+        const stored = JSON.parse(data);
+        const merge = (target, source) => {
+            if (!source) return target;
+            return { ...target, ...source };
+        };
+        return {
+            total: merge(defaults.total, stored.total),
+            standard: merge(defaults.standard, stored.standard),
+            expanding: merge(defaults.expanding, stored.expanding),
+            singleplayer: merge(defaults.singleplayer, stored.singleplayer),
+            multiplayer: merge(defaults.multiplayer, stored.multiplayer)
+        };
+    } catch(e) { return defaults; }
+}
+
+function saveStats(stats) {
+    localStorage.setItem(STATS_KEY, JSON.stringify(stats));
+}
+
+function recordGameResult(gs) {
+    // DO NOT record stats if it's an "Only Bots" simulation, a non-started lobby, or no actual human is in the session
+    if (isOnlyBotsMode || !gs.started || gs.players.every(p => p.isBot)) return;
+    if (gameSync.localPlayerId === null || gameSync.localPlayerId === undefined) return;
+    
+    // Use gameId or matchId as unique ID
+    const gid = gs.gameId || gameSync.matchId;
+    if (!gid || recordedGameId === gid) return;
+    recordedGameId = gid;
+
+    const p = gs.players[gameSync.localPlayerId];
+    if (!p || p.isBot) return;
+
+    const stats = loadStats();
+    const isExpanding = (gs.gameMode === 'Expanding Board (Experimental)');
+    const modeKey = isExpanding ? 'expanding' : 'standard';
+    const connectionKey = gameSync.isMultiplayer ? 'multiplayer' : 'singleplayer';
+
+    [stats.total, stats[modeKey], stats[connectionKey]].forEach(s => {
+        if (!s) return;
+        s.games++;
+        if (gs.winner && gs.winner.id === p.id) s.wins++;
+        else s.losses++;
+        s.turns += gs.rotations;
+        s.vp += p.calculateVP(gs.longestRoadHolderId, gs.largestArmyHolderId);
+        s.settlements += (p.totalSettlementsBuilt || 0);
+        s.cities += (p.totalCitiesBuilt || 0);
+        s.roads += (p.totalRoadsBuilt || 0);
+        s.devCards += (p.totalDevCardsUsed || 0);
+    });
+
+    saveStats(stats);
+    showToast("Game results recorded in Vault of Records.", "info");
+}
+
+function updateStatsUI() {
+    const stats = loadStats();
+    const container = document.getElementById('stats-content');
+    if (!container) return;
+
+    const sections = [
+        { label: 'ALL MODES (TOTALS)', data: stats.total, color: '#9b59b6', fullWidth: true },
+        { label: 'SINGLEPLAYER', data: stats.singleplayer, color: '#2ecc71' },
+        { label: 'MULTIPLAYER', data: stats.multiplayer, color: '#3498db' },
+        { label: 'STANDARD MODE', data: stats.standard, color: '#95a5a6' },
+        { label: 'EXPANDING BOARD', data: stats.expanding, color: '#f4a460' }
+    ];
+
+    container.innerHTML = sections.map(sec => {
+        if (!sec.data) return "";
+        const winRate = sec.data.games > 0 ? Math.round((sec.data.wins / sec.data.games) * 100) : 0;
+        const avgTurns = sec.data.games > 0 ? Math.round(sec.data.turns / sec.data.games) : 0;
+        const avgVP = sec.data.games > 0 ? (sec.data.vp / sec.data.games).toFixed(1) : "0.0";
+        const gridSpan = sec.fullWidth ? "grid-column: span 2;" : "";
+        
+        return `
+            <div style="background: rgba(255,255,255,0.05); padding: 15px; border-radius: 10px; border-left: 5px solid ${sec.color}; ${gridSpan}">
+                <div style="color: ${sec.color}; font-weight: bold; font-size: 14px; margin-bottom: 10px;">${sec.label}</div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                    <div style="font-size: 11px; color: #aaa;">GAMES: <b style="color: #fff;">${sec.data.games}</b></div>
+                    <div style="font-size: 11px; color: #aaa;">WINS: <b style="color: #2ecc71;">${sec.data.wins}</b></div>
+                    <div style="font-size: 11px; color: #aaa;">WIN RATE: <b style="color: #fff;">${winRate}%</b></div>
+                    <div style="font-size: 11px; color: #aaa;">LOSSES: <b style="color: #e74c3c;">${sec.data.losses}</b></div>
+                    <div style="font-size: 11px; color: #aaa;">TOTAL TURNS: <b style="color: #fff;">${sec.data.turns}</b></div>
+                    <div style="font-size: 11px; color: #aaa;">AVG VP: <b style="color: #fff;">${avgVP}</b></div>
+                </div>
+                <!-- Infrastructure Stats -->
+                <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.1); display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                    <div style="font-size: 11px; color: #aaa;">ROADS BUILT: <b style="color: #fff;">${sec.data.roads || 0}</b></div>
+                    <div style="font-size: 11px; color: #aaa;">SETTLEMENTS: <b style="color: #fff;">${sec.data.settlements || 0}</b></div>
+                    <div style="font-size: 11px; color: #aaa;">CITIES BUILT: <b style="color: #fff;">${sec.data.cities || 0}</b></div>
+                    <div style="font-size: 11px; color: #aaa;">DEV CARDS PLAYED: <b style="color: #fff;">${sec.data.devCards || 0}</b></div>
+                </div>
+            </div>
+        `;
+    }).join("");
+}
+
 // --- LOGIC: BOARD ---
 class Vertex {
   constructor(id, x, y) {
@@ -289,6 +404,12 @@ class Player {
     this.playedKnights = 0;
     this.newDevCardThisTurnIdx = -1; // Prevent playing a card on the same turn it was bought
     this.isEliminated = false;
+
+    // --- Statistics for Vault ---
+    this.totalSettlementsBuilt = 0;
+    this.totalCitiesBuilt = 0;
+    this.totalRoadsBuilt = 0;
+    this.totalDevCardsUsed = 0;
   }
 
   toJSON() {
@@ -296,6 +417,10 @@ class Player {
       id: this.id, name: this.name, color: this.color,
       resources: this.resources,
       settlements: this.settlements, cities: this.cities, roads: this.roads,
+      totalSettlementsBuilt: this.totalSettlementsBuilt || 0,
+      totalCitiesBuilt: this.totalCitiesBuilt || 0,
+      totalRoadsBuilt: this.totalRoadsBuilt || 0,
+      totalDevCardsUsed: this.totalDevCardsUsed || 0,
       victoryPoints: this.victoryPoints, visibleVP: this.visibleVP,
       playedKnights: this.playedKnights,
       isEliminated: !!this.isEliminated,
@@ -309,6 +434,12 @@ class Player {
     const oldIsBot = this.isBot;
     Object.assign(this, data);
     
+    // Ensure stats are handled
+    this.totalSettlementsBuilt = data.totalSettlementsBuilt || 0;
+    this.totalCitiesBuilt = data.totalCitiesBuilt || 0;
+    this.totalRoadsBuilt = data.totalRoadsBuilt || 0;
+    this.totalDevCardsUsed = data.totalDevCardsUsed || 0;
+
     if (data.devCards) {
         this.devCards = data.devCards.map(c => ({
             type: c.t,
@@ -401,6 +532,7 @@ class GameState {
     this.activeTrade = null;
     this.tradeTimer = null;
     this.turnToken = 0;
+    this.gameId = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
     this.rotations = 0;
     this.turnsInRotation = 0;
     this.waitingForDiscards = []; // Array of ids who must discard
@@ -600,6 +732,7 @@ class GameState {
 
     this.playedDevCardThisTurn = true;
     p.devCards.splice(idx, 1);
+    p.totalDevCardsUsed++;
     this.log(`${p.name} played a ${card.name} card`);
 
     switch (card.type) {
@@ -1801,6 +1934,7 @@ class GameState {
         if (this.board.getVertex(id).ownerId === null) {
           const v = this.board.getVertex(id);
           v.ownerId = p.id; p.settlements.push(id);
+          p.totalSettlementsBuilt++;
           this.pendingSettlement = id; this.log('Place road');
           success = true;
           
@@ -1816,6 +1950,7 @@ class GameState {
         const e = this.board.getEdge(id);
         if (e.ownerId === null && (e.v1 === this.pendingSettlement || e.v2 === this.pendingSettlement)) {
           e.ownerId = p.id; p.roads.push(id); 
+          p.totalRoadsBuilt++;
           this.updateLongestRoad();
           this.finishInitial();
           success = true;
@@ -1823,16 +1958,21 @@ class GameState {
       }
     } else if (this.hasRolled) {
       if (type === 'SETTLEMENT' && p.canAfford(COSTS.SETTLEMENT) && Rules.canPlaceSettlement(this.board, id, p, 'PLAY')) {
-        this.board.getVertex(id).ownerId = p.id; p.settlements.push(id); this.returnResources(p, COSTS.SETTLEMENT); this.log('Built Settlement');
+        this.board.getVertex(id).ownerId = p.id; p.settlements.push(id); 
+        p.totalSettlementsBuilt++;
+        this.returnResources(p, COSTS.SETTLEMENT); this.log('Built Settlement');
         success = true;
       } else if (type === 'ROAD' && p.canAfford(COSTS.ROAD) && Rules.canPlaceRoad(this.board, id, p)) {
-        this.board.getEdge(id).ownerId = p.id; p.roads.push(id); this.returnResources(p, COSTS.ROAD); this.log('Built Road');
+        this.board.getEdge(id).ownerId = p.id; p.roads.push(id); 
+        p.totalRoadsBuilt++;
+        this.returnResources(p, COSTS.ROAD); this.log('Built Road');
         this.updateLongestRoad();
         success = true;
       } else if (type === 'CITY' && p.canAfford(COSTS.CITY)) {
         const v = this.board.getVertex(id);
         if (v.ownerId === p.id && !v.isCity) { 
             v.isCity = true; p.cities.push(id); p.settlements = p.settlements.filter(s => s !== id); 
+            p.totalCitiesBuilt++;
             this.returnResources(p, COSTS.CITY); this.log('Built City'); 
             success = true;
         }
@@ -2410,10 +2550,9 @@ class CanvasRenderer {
       this.ctx.font = isMobile ? '9px Arial' : '11px Arial';
       this.ctx.textAlign = 'left';
       this.ctx.fillText(`ID: ${gameSync.matchId}`, 35, ly);
-      document.getElementById('gameAbandonBtn').style.display = 'block';
-    } else {
-      document.getElementById('gameAbandonBtn').style.display = 'none';
     }
+
+    document.getElementById('gameAbandonBtn').style.display = 'block';
 
     if (gs.friendlyRobber) {
       this.ctx.fillStyle = '#00ffcc';
@@ -2788,10 +2927,11 @@ const multiplayerMenu = document.getElementById('multiplayer-choice-menu');
 const hostMenu = document.getElementById('host-menu');
 const joinMenu = document.getElementById('join-menu');
 const lobbyMenu = document.getElementById('lobby-menu');
+const statsMenu = document.getElementById('stats-menu');
 
 function showScreen(screen) {
     if (!screen) return;
-    [mainMenu, singleplayerMenu, multiplayerMenu, hostMenu, joinMenu, lobbyMenu].forEach(s => {
+    [mainMenu, singleplayerMenu, multiplayerMenu, hostMenu, joinMenu, lobbyMenu, statsMenu].forEach(s => {
         if (s) s.style.display = 'none';
     });
     screen.style.display = 'block';
@@ -3423,6 +3563,37 @@ class GameSync {
         }
     }
 
+    async getPublicMatches() {
+        if (!this.db) {
+            const ok = await this.init();
+            if (!ok) return [];
+        }
+        try {
+            // Get all matches. In a production app, you might want to filter by "started: false"
+            // or a manual "public" flag. For now, since it's a small app, we'll list current active matches.
+            const querySnapshot = await this.db.collection('matches').limit(20).get();
+            const matches = [];
+            querySnapshot.forEach((doc) => {
+                const data = doc.data();
+                // Basic validation: only show games with players
+                if (data.players && data.players.length > 0) {
+                    matches.push({
+                        id: doc.id,
+                        host: data.players[0].name || "Unknown",
+                        playerCount: data.players.length,
+                        radius: data.board ? data.board.radius : 2,
+                        mode: data.gameMode || 'Standard',
+                        started: data.started || false
+                    });
+                }
+            });
+            return matches;
+        } catch (e) {
+            console.error("Error fetching matches:", e);
+            return [];
+        }
+    }
+
     async joinMatch(id, onUpdate, mustExist = false, initialConfig = null) {
         this.matchId = id;
         this.gameRef = this.db.collection('matches').doc(id);
@@ -3827,11 +3998,30 @@ Object.entries(navBtns).forEach(([id, screen]) => {
     if (btn) btn.onclick = () => showScreen(screen);
 });
 
+const showStatsBtn = document.getElementById('showStatsBtn');
+if (showStatsBtn) {
+    showStatsBtn.onclick = () => {
+        updateStatsUI();
+        showScreen(statsMenu);
+    };
+}
+
+const clearStatsBtn = document.getElementById('clearStatsBtn');
+if (clearStatsBtn) {
+    clearStatsBtn.onclick = () => {
+        if (confirm("This will permanently ERASE all of your game records. Are you sure?")) {
+            saveStats(DEFAULT_STATS);
+            updateStatsUI();
+            showToast("Records purged.", "info");
+        }
+    };
+}
+
 // Back buttons
 document.querySelectorAll('.back-btn').forEach(btn => {
     btn.onclick = async () => {
         const currentId = btn.closest('.menu-card').id;
-        if (currentId === 'singleplayer-menu' || currentId === 'multiplayer-choice-menu') {
+        if (currentId === 'singleplayer-menu' || currentId === 'multiplayer-choice-menu' || currentId === 'stats-menu') {
             showScreen(mainMenu);
         } else if (currentId === 'host-menu' || currentId === 'join-menu') {
             showScreen(multiplayerMenu);
@@ -4030,6 +4220,11 @@ document.getElementById('newGameBtn').onclick = () => {
 
 const handleAbandon = async () => {
     if (confirm(gameSync.isHost ? "Are you sure? This will end the game for everyone!" : "Are you sure you want to leave?")) {
+        // Record as a loss if it's a game we're currently in
+        if (gs && !gs.winner) {
+            recordGameResult(gs);
+        }
+        
         await gameSync.abandonMatch();
         gs = null;
         gameInterface.style.display = 'none';
@@ -4040,6 +4235,79 @@ const handleAbandon = async () => {
 
 document.getElementById('lobbyAbandonBtn').onclick = handleAbandon;
 document.getElementById('gameAbandonBtn').onclick = handleAbandon;
+
+// --- Game Browser Logic ---
+async function refreshGameBrowser() {
+    const listEl = document.getElementById('game-list');
+    const btn = document.getElementById('refreshGamesBtn');
+    if (!listEl || !btn) return;
+
+    btn.innerText = "Searching...";
+    btn.disabled = true;
+
+    try {
+        const matches = await gameSync.getPublicMatches();
+        listEl.innerHTML = '';
+
+        if (matches.length === 0) {
+            listEl.innerHTML = '<p style="color: #666; font-size: 11px; text-align: center; margin: 10px 0;">No active games found.</p>';
+        } else {
+            matches.forEach(m => {
+                const playerCap = { '1': 3, '2': 4, '3': 6, '4': 8, '5': 10, '19': 38 };
+                const max = playerCap[m.radius] || 6;
+                const isFull = m.playerCount >= max;
+
+                const item = document.createElement('div');
+                item.style.padding = '8px';
+                item.style.marginBottom = '5px';
+                item.style.background = 'rgba(255,255,255,0.05)';
+                item.style.borderRadius = '4px';
+                item.style.display = 'flex';
+                item.style.alignItems = 'center';
+                item.style.justifyContent = 'space-between';
+                item.style.cursor = isFull && !m.started ? 'not-allowed' : 'pointer';
+                item.style.transition = 'background 0.2s';
+                
+                // Change background on hover if not full
+                if (!isFull || m.started) {
+                  item.onmouseenter = () => item.style.background = 'rgba(255,255,255,0.15)';
+                  item.onmouseleave = () => item.style.background = 'rgba(255,255,255,0.05)';
+                }
+
+                const info = document.createElement('div');
+                info.innerHTML = `
+                    <div style="font-weight: bold; font-size: 13px; color: #3498db;">${m.id} <span style="font-weight: normal; color: #7f8c8d; font-size: 11px;">(Host: ${m.host})</span></div>
+                    <div style="font-size: 10px; color: #aaa;">${m.mode} • ${m.playerCount}/${max} Players ${m.started ? '<b style="color:#e74c3c;">(Started)</b>' : '<b style="color:#2ecc71;">(Lobby)</b>'}</div>
+                `;
+
+                const joinBtn = document.createElement('button');
+                joinBtn.innerText = isFull && !m.started ? "Full" : "Join";
+                joinBtn.style.padding = '4px 8px';
+                joinBtn.style.fontSize = '10px';
+                joinBtn.style.background = (m.started || isFull) ? '#7f8c8d' : '#2ecc71';
+                joinBtn.disabled = m.started || isFull;
+
+                item.onclick = () => {
+                   if (!m.started && !isFull) {
+                     document.getElementById('matchIdJoin').value = m.id;
+                     document.getElementById('joinConfirmBtn').click();
+                   }
+                };
+
+                item.appendChild(info);
+                item.appendChild(joinBtn);
+                listEl.appendChild(item);
+            });
+        }
+    } catch (e) {
+        showToast("Failed to refresh games.", "error");
+    } finally {
+        btn.innerText = "Refresh List";
+        btn.disabled = false;
+    }
+}
+
+document.getElementById('refreshGamesBtn').onclick = refreshGameBrowser;
 
 // --- Game Execution ---
 
@@ -4140,6 +4408,8 @@ function loop() {
   discardPanel.style.display = (humanInDiscard && !isWinning) ? 'flex' : 'none';
   
   if (isWinning) {
+      recordGameResult(gs);
+
       if (victoryPanel.style.display !== 'flex') {
           victoryPanel.style.display = 'flex';
           const victNameEl = document.getElementById('victory-name');
