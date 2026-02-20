@@ -59,43 +59,54 @@ class Board {
   }
 
   toJSON() {
+    const compactHexes = {};
+    const typeNames = Object.keys(HEX_TYPES);
+    this.hexes.forEach((h, k) => {
+        compactHexes[k] = [typeNames.indexOf(Object.keys(HEX_TYPES).find(nk => HEX_TYPES[nk] === h.terrain)), h.number];
+    });
+    
+    const compactVertices = {};
+    this.vertices.forEach((v, k) => {
+        if (v.ownerId !== null || v.isCity) {
+            compactVertices[k] = [v.ownerId, v.isCity ? 1 : 0];
+        }
+    });
+
+    const compactEdges = {};
+    this.edges.forEach((e, k) => {
+        if (e.ownerId !== null) {
+            compactEdges[k] = e.ownerId;
+        }
+    });
+
     return {
       radius: this.radius,
-      hexes: Object.fromEntries(this.hexes),
-      vertices: Object.fromEntries(Array.from(this.vertices.entries()).map(([k, v]) => [k, { 
-          id: v.id, x: v.x, y: v.y, ownerId: v.ownerId, isCity: v.isCity, 
-          port: v.port, hexes: v.hexes.map(h => `${h.q},${h.r}`) 
-      }])),
-      edges: Object.fromEntries(Array.from(this.edges.entries()).map(([k, v]) => [k, { 
-          id: v.id, v1: v.v1, v2: v.v2, ownerId: v.ownerId 
-      }])),
-      ports: Object.fromEntries(this.ports)
+      hexes: compactHexes,
+      vertices: compactVertices,
+      edges: compactEdges
     };
   }
 
   fromJSON(data) {
     this.radius = data.radius;
-    this.hexes = new Map(Object.entries(data.hexes));
-    this.vertices = new Map(Object.entries(data.vertices).map(([k, v]) => {
-        const vertex = new Vertex(v.id, v.x, v.y);
-        vertex.ownerId = v.ownerId;
-        vertex.isCity = v.isCity;
-        vertex.port = v.port;
-        vertex._tempHexKeys = v.hexes;
-        return [k, vertex];
-    }));
-    this.edges = new Map(Object.entries(data.edges).map(([k, v]) => {
-        const edge = new Edge(v.id, v.v1, v.v2);
-        edge.ownerId = v.ownerId;
-        return [k, edge];
-    }));
-    this.ports = new Map(Object.entries(data.ports));
+    this.generateBoard(data.hexes); // Regenerate base board with saved hex data
 
-    // Re-link vertex hexes
-    this.vertices.forEach(v => {
-        v.hexes = v._tempHexKeys.map(key => this.hexes.get(key));
-        delete v._tempHexKeys;
-    });
+    if (data.vertices) {
+      Object.entries(data.vertices).forEach(([k, [ownerId, isCity]]) => {
+        const v = this.vertices.get(k);
+        if (v) {
+          v.ownerId = ownerId;
+          v.isCity = !!isCity;
+        }
+      });
+    }
+
+    if (data.edges) {
+      Object.entries(data.edges).forEach(([k, ownerId]) => {
+        const e = this.edges.get(k);
+        if (e) e.ownerId = ownerId;
+      });
+    }
   }
 
   static fromJSON(data) {
@@ -104,8 +115,12 @@ class Board {
     return board;
   }
 
-  generateBoard() {
+  generateBoard(compactHexes = null) {
     this.hexes.clear();
+    this.vertices.clear();
+    this.edges.clear();
+    this.ports.clear();
+
     const allKeys = [];
     for (let q = -this.radius; q <= this.radius; q++) {
       for (let r = Math.max(-this.radius, -q - this.radius); r <= Math.min(this.radius, -q + this.radius); r++) {
@@ -113,63 +128,72 @@ class Board {
       }
     }
 
-    // 1. Determine Desert Count based on board size (Radius)
-    let numDeserts = 1;
-    if (this.radius === 3) numDeserts = 2; // Large
-    else if (this.radius === 4) numDeserts = 3; // XL
-    else if (this.radius === 5) numDeserts = 5; // Colossal
-    else if (this.radius >= 19) numDeserts = 40; // Hell
-    else if (this.radius >= 6) numDeserts = 10; // Mega (if ever added)
-
-    // 2. Place Deserts sparsely (not adjacent if possible)
-    const desertKeys = [];
-    const shuffledKeys = [...allKeys].sort(() => Math.random() - 0.5);
-    for (const key of shuffledKeys) {
-        if (desertKeys.length >= numDeserts) break;
+    if (compactHexes) {
+      const typeKeys = Object.keys(HEX_TYPES);
+      allKeys.forEach(key => {
         const [q, r] = key.split(',').map(Number);
-        const neighbors = [
-            `${q+1},${r}`, `${q-1},${r}`, `${q},${r+1}`, 
-            `${q},${r-1}`, `${q+1},${r-1}`, `${q-1},${r+1}`
-        ];
-        // Ensure no neighbor is already a desert
-        if (!neighbors.some(nk => desertKeys.includes(nk))) {
-            desertKeys.push(key);
-        }
-    }
-    // Fallback: If map is too small for sparse deserts (unlikely for our sizes), just take first randoms
-    if (desertKeys.length < numDeserts) {
-        for (const key of shuffledKeys) {
-            if (desertKeys.length >= numDeserts) break;
-            if (!desertKeys.includes(key)) desertKeys.push(key);
-        }
-    }
+        const [tIdx, num] = compactHexes[key];
+        this.hexes.set(key, { q, r, terrain: HEX_TYPES[typeKeys[tIdx]], number: num, vertices: [], edges: [] });
+      });
+    } else {
+      // 1. Determine Desert Count based on board size (Radius)
+      let numDeserts = 1;
+      if (this.radius === 3) numDeserts = 2; // Large
+      else if (this.radius === 4) numDeserts = 3; // XL
+      else if (this.radius === 5) numDeserts = 5; // Colossal
+      else if (this.radius >= 19) numDeserts = 40; // Hell
+      else if (this.radius >= 6) numDeserts = 10; // Mega (if ever added)
 
-    // 3. Prepare Terrain and Number pools for other hexes
-    const nonDesertKeys = allKeys.filter(k => !desertKeys.includes(k));
-    const terrainTypes = Object.values(HEX_TYPES).filter(t => t.name !== 'Water' && t.name !== 'Desert');
-    let terrainPool = [];
-    for (let i = 0; i < nonDesertKeys.length; i++) {
-        terrainPool.push(terrainTypes[i % terrainTypes.length]);
-    }
-    terrainPool.sort(() => Math.random() - 0.5);
+      // 2. Place Deserts sparsely (not adjacent if possible)
+      const desertKeys = [];
+      const shuffledKeys = [...allKeys].sort(() => Math.random() - 0.5);
+      for (const key of shuffledKeys) {
+          if (desertKeys.length >= numDeserts) break;
+          const [q, r] = key.split(',').map(Number);
+          const neighbors = [
+              `${q+1},${r}`, `${q-1},${r}`, `${q},${r+1}`, 
+              `${q},${r-1}`, `${q+1},${r-1}`, `${q-1},${r+1}`
+          ];
+          // Ensure no neighbor is already a desert
+          if (!neighbors.some(nk => desertKeys.includes(nk))) {
+              desertKeys.push(key);
+          }
+      }
+      // Fallback: If map is too small for sparse deserts (unlikely for our sizes), just take first randoms
+      if (desertKeys.length < numDeserts) {
+          for (const key of shuffledKeys) {
+              if (desertKeys.length >= numDeserts) break;
+              if (!desertKeys.includes(key)) desertKeys.push(key);
+          }
+      }
 
-    const possibleNums = [2, 3, 3, 4, 4, 5, 5, 6, 6, 8, 8, 9, 9, 10, 10, 11, 11, 12];
-    let numberPool = [];
-    for (let i = 0; i < nonDesertKeys.length; i++) {
-        numberPool.push(possibleNums[i % possibleNums.length]);
-    }
-    numberPool.sort(() => Math.random() - 0.5);
+      // 3. Prepare Terrain and Number pools for other hexes
+      const nonDesertKeys = allKeys.filter(k => !desertKeys.includes(k));
+      const terrainTypes = Object.values(HEX_TYPES).filter(t => t.name !== 'Water' && t.name !== 'Desert');
+      let terrainPool = [];
+      for (let i = 0; i < nonDesertKeys.length; i++) {
+          terrainPool.push(terrainTypes[i % terrainTypes.length]);
+      }
+      terrainPool.sort(() => Math.random() - 0.5);
 
-    // 4. Assign Hexes
-    let tIdx = 0, nIdx = 0;
-    allKeys.forEach(key => {
-        const [q, r] = key.split(',').map(Number);
-        if (desertKeys.includes(key)) {
-            this.hexes.set(key, { q, r, terrain: HEX_TYPES.DESERT, number: null, vertices: [], edges: [] });
-        } else {
-            this.hexes.set(key, { q, r, terrain: terrainPool[tIdx++], number: numberPool[nIdx++], vertices: [], edges: [] });
-        }
-    });
+      const possibleNums = [2, 3, 3, 4, 4, 5, 5, 6, 6, 8, 8, 9, 9, 10, 10, 11, 11, 12];
+      let numberPool = [];
+      for (let i = 0; i < nonDesertKeys.length; i++) {
+          numberPool.push(possibleNums[i % possibleNums.length]);
+      }
+      numberPool.sort(() => Math.random() - 0.5);
+
+      // 4. Assign Hexes
+      let tIdx = 0, nIdx = 0;
+      allKeys.forEach(key => {
+          const [q, r] = key.split(',').map(Number);
+          if (desertKeys.includes(key)) {
+              this.hexes.set(key, { q, r, terrain: HEX_TYPES.DESERT, number: null, vertices: [], edges: [] });
+          } else {
+              this.hexes.set(key, { q, r, terrain: terrainPool[tIdx++], number: numberPool[nIdx++], vertices: [], edges: [] });
+          }
+      });
+    }
 
     // 5. Build Vertices and Edges
     this.hexes.forEach(hex => {
@@ -193,6 +217,8 @@ class Board {
         hex.edges.push(eKey);
       }
     });
+
+    this.generatePorts();
   }
 
   getHexVertexPositions(q, r) {
@@ -265,15 +291,30 @@ class Player {
   }
 
   toJSON() {
-    const data = { ...this };
-    delete data.isBot;
-    return data;
+    return {
+      id: this.id, name: this.name, color: this.color,
+      resources: this.resources,
+      settlements: this.settlements, cities: this.cities, roads: this.roads,
+      victoryPoints: this.victoryPoints, visibleVP: this.visibleVP,
+      playedKnights: this.playedKnights,
+      devCards: this.devCards.map(c => ({ t: c.type, b: c.boughtTurn })),
+      newDevCardThisTurnIdx: this.newDevCardThisTurnIdx,
+      waitingForSettlement: this.waitingForSettlement
+    };
   }
 
   fromJSON(data) {
     const oldIsBot = this.isBot;
     Object.assign(this, data);
     
+    if (data.devCards) {
+        this.devCards = data.devCards.map(c => ({
+            type: c.t,
+            boughtTurn: c.b,
+            ...DEV_CARD_TYPES[c.t]
+        }));
+    }
+
     if (gameSync.isHost) {
         // Host restores bot state locally based on name prefix (AI/Bot)
         // If a human guest replaces a bot, their name won't match, so isBot becomes false.
@@ -298,8 +339,8 @@ class Player {
   calculateVP(longestRoadHolderId, largestArmyHolderId) { 
     const vpCardsCount = this.devCards.filter(c => c.type === 'VP').length;
     this.visibleVP = this.settlements.length + (this.cities.length * 2); 
-    if (longestRoadHolderId === this.id) this.visibleVP += 2;
-    if (largestArmyHolderId === this.id) this.visibleVP += 2;
+    if (longestRoadHolderId !== null && longestRoadHolderId !== undefined && longestRoadHolderId === this.id) this.visibleVP += 2;
+    if (largestArmyHolderId !== null && largestArmyHolderId !== undefined && largestArmyHolderId === this.id) this.visibleVP += 2;
     this.victoryPoints = this.visibleVP + vpCardsCount;
     return this.victoryPoints; 
   }
@@ -414,12 +455,14 @@ class GameState {
       waitingToPickVictim: !!this.waitingToPickVictim,
       waitingForDiscards: this.waitingForDiscards || [],
       playedDevCardThisTurn: !!this.playedDevCardThisTurn,
-      history: this.history || [],
+      history: (this.history || []).slice(-50), // Only keep last 50 log entries
       winner: (this.winner === undefined) ? null : this.winner,
       bankResources: this.bankResources || {},
-      devCardDeck: this.devCardDeck || [],
+      devCardDeck: (this.devCardDeck || []).map(c => c.type), // Only store types
       largestArmyHolderId: (this.largestArmyHolderId === undefined) ? null : this.largestArmyHolderId,
+      largestArmySize: this.largestArmySize,
       longestRoadHolderId: (this.longestRoadHolderId === undefined) ? null : this.longestRoadHolderId,
+      longestRoadLength: this.longestRoadLength,
       activeTrade: (this.activeTrade === undefined) ? null : this.activeTrade,
       aiTradeAttempts: (this.aiTradeAttempts === undefined) ? 0 : this.aiTradeAttempts,
       pendingRoads: (this.pendingRoads === undefined) ? 0 : this.pendingRoads,
@@ -464,6 +507,14 @@ class GameState {
             this[key] = data[key];
         }
     });
+
+    // Expand devCardDeck from types
+    if (data.devCardDeck) {
+        this.devCardDeck = data.devCardDeck.map(type => ({
+            type: type,
+            ...DEV_CARD_TYPES[type]
+        }));
+    }
 
     // WAKE UP AI: If turn changed to a bot and we are the host, trigger AI logic
     if (gameSync.isHost && (this.currentPlayerIdx !== oldIdx || this.turnToken !== oldToken)) {
@@ -542,15 +593,21 @@ class GameState {
   }
 
   updateLargestArmy() {
+    let changed = false;
     this.players.forEach(p => {
       if (p.playedKnights > this.largestArmySize) {
         this.largestArmySize = p.playedKnights;
         if (this.largestArmyHolderId !== p.id) {
             this.largestArmyHolderId = p.id;
             this.log(`${p.name} is now the Largest Army Holder!`);
+            changed = true;
         }
       }
     });
+    if (changed) {
+        this.players.forEach(p => p.calculateVP(this.longestRoadHolderId, this.largestArmyHolderId));
+        this.checkWinner();
+    }
   }
 
   monopolyResource(p, res) {
@@ -1537,7 +1594,7 @@ class GameState {
         this.longestRoadHolderId = newHolderId;
         this.longestRoadLength = maxLength;
         this.log(`Longest Road: ${this.players[newHolderId].name} (${this.longestRoadLength} segments)`);
-        this.players.forEach(p => p.calculateVP(this.longestRoadHolderId));
+        this.players.forEach(p => p.calculateVP(this.longestRoadHolderId, this.largestArmyHolderId));
         this.checkWinner();
     }
   }
@@ -2866,7 +2923,7 @@ class GameSync {
         }
     }
 
-    async joinMatch(id, onUpdate, mustExist = false) {
+    async joinMatch(id, onUpdate, mustExist = false, initialConfig = null) {
         this.matchId = id;
         this.gameRef = this.db.collection('matches').doc(id);
         this.isMultiplayer = true;
@@ -2884,6 +2941,11 @@ class GameSync {
                     this.isHost = true;
                     this.localPlayerId = 0;
                     
+                    const br = initialConfig?.boardRadius || 2;
+                    const wp = initialConfig?.winPoints || 10;
+                    const fr = initialConfig?.friendlyRobber || false;
+                    const mr = initialConfig?.multiRobber || false;
+
                     const p0 = new Player(0, myName, PLAYER_COLORS[0], false);
                     const initialBoard = new Board(br);
                     const initialGs = new GameState(initialBoard, [p0], wp, fr, "Skilled", mr);
@@ -2976,6 +3038,7 @@ class GameSync {
                 gs = null;
                 gameInterface.style.display = 'none';
                 menuOverlay.style.display = 'flex';
+                showScreen(multiplayerMenu);
                 
                 // Reset Lobby UI
                 const syncBtn = document.getElementById('joinConfirmBtn');
@@ -3132,13 +3195,13 @@ function resetGame(config) {
         players.push(new Player(i, `AI ${i}`, PLAYER_COLORS[i % PLAYER_COLORS.length], true));
     }
   } else {
-    // Preserve existing human players in lobby
+    // Preserve existing human players in lobby, but reset their game state
     let humanPlayers = (gs && gs.players) ? gs.players.filter(p => !p.isBot) : [];
     
     if (humanPlayers.length === 0) {
         players.push(new Player(0, myName, PLAYER_COLORS[0], false));
     } else {
-        players = [...humanPlayers];
+        players = humanPlayers.map((p, idx) => new Player(idx, p.name, p.color, false));
         // Ensure our name matches what's in the input
         if (players[gameSync.localPlayerId]) {
             players[gameSync.localPlayerId].name = myName;
@@ -3243,6 +3306,12 @@ if (createMatchBtn) {
     }
 
     try {
+        const initialConfig = {
+            boardRadius: parseInt(document.getElementById('boardSizeHost').value),
+            winPoints: parseInt(document.getElementById('winPointsHost').value),
+            friendlyRobber: document.getElementById('friendlyRobberHost').checked,
+            multiRobber: document.getElementById('multiRobberHost').checked
+        };
         await gameSync.joinMatch(mid, (remoteGs) => {
             if (menuOverlay.style.display !== 'none') {
                 showScreen(lobbyMenu);
@@ -3274,7 +3343,7 @@ if (createMatchBtn) {
                     resize();
                 }
             }
-        });
+        }, false, initialConfig);
     } catch (e) {
         showToast(e.message, "error");
     }
