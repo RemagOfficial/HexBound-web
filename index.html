@@ -111,7 +111,7 @@
         #rulesHandle {
             position: absolute;
             left: -40px;
-            top: 0;
+            bottom: 0;
             width: 40px;
             height: 120px;
             background: #2c3e50;
@@ -411,6 +411,14 @@
             </div>
 
             <div class="option-group">
+                <label>Game Mode</label>
+                <select id="gameModeSolo">
+                    <option value="Standard" selected>Standard</option>
+                    <option value="Expanding Board (Experimental)">Expanding Board (Experimental)</option>
+                </select>
+            </div>
+
+            <div class="option-group" id="boardSizeSoloGroup">
                 <label>Board Size</label>
                 <select id="boardSizeSolo">
                     <option value="1">Small (7 Hexes)</option>
@@ -420,6 +428,25 @@
                     <option value="5">Colossal (91 Hexes)</option>
                     <option value="19">Hell (1141 Hexes)</option>
                 </select>
+            </div>
+
+            <div class="option-group" id="expansionIntervalSoloGroup" style="display: none;">
+                <label>Expansion Frequency</label>
+                <select id="expansionIntervalSolo">
+                    <option value="1">Fast (1 Rotation)</option>
+                    <option value="2" selected>Standard (2 Rotations)</option>
+                    <option value="3">Slow (3 Rotations)</option>
+                    <option value="5">Very Slow (5 Rotations)</option>
+                    <option value="Random">Random (Surprise!)</option>
+                </select>
+            </div>
+
+            <div class="option-group" id="expansionDesertSoloGroup" style="display: none;">
+                <label>New Hex Desert Chance: <span id="desertNewValueSolo">10</span>%</label>
+                <input type="range" id="desertNewSolo" min="0" max="50" value="10">
+                
+                <label style="margin-top: 10px;">Tile Decay (Wither) Chance: <span id="desertDecayValueSolo">20</span>%</label>
+                <input type="range" id="desertDecaySolo" min="0" max="50" value="20">
             </div>
 
             <div class="option-group">
@@ -482,6 +509,14 @@
             </div>
 
             <div class="option-group">
+                <label>Game Mode</label>
+                <select id="gameModeHost">
+                    <option value="Standard" selected>Standard</option>
+                    <option value="Expanding Board (Experimental)">Expanding Board (Experimental)</option>
+                </select>
+            </div>
+
+            <div class="option-group" id="boardSizeHostGroup">
                 <label>Board Size</label>
                 <select id="boardSizeHost">
                     <option value="1">Small (7 Hexes)</option>
@@ -491,6 +526,25 @@
                     <option value="5">Colossal (91 Hexes)</option>
                     <option value="19">Hell (1141 Hexes)</option>
                 </select>
+            </div>
+
+            <div class="option-group" id="expansionIntervalHostGroup" style="display: none;">
+                <label>Expansion Frequency</label>
+                <select id="expansionIntervalHost">
+                    <option value="1">Fast (1 Rotation)</option>
+                    <option value="2" selected>Standard (2 Rotations)</option>
+                    <option value="3">Slow (3 Rotations)</option>
+                    <option value="5">Very Slow (5 Rotations)</option>
+                    <option value="Random">Random (Surprise!)</option>
+                </select>
+            </div>
+
+            <div class="option-group" id="expansionDesertHostGroup" style="display: none;">
+                <label>New Hex Desert Chance: <span id="desertNewValueHost">10</span>%</label>
+                <input type="range" id="desertNewHost" min="0" max="50" value="10">
+                
+                <label style="margin-top: 10px;">Tile Decay (Wither) Chance: <span id="desertDecayValueHost">20</span>%</label>
+                <input type="range" id="desertDecayHost" min="0" max="50" value="20">
             </div>
 
             <div class="option-group">
@@ -616,9 +670,16 @@
           <button id="cancelPickerBtn" style="margin-top:15px; width:100%; background:#e74c3c;">Cancel</button>
         </div>
 
-        <div id="victory-panel" style="display:none; background: rgba(0,0,0,0.9); padding: 40px; border: 4px solid gold; border-radius: 20px; flex-direction: column; gap: 25px; align-items: center; box-shadow: 0 0 100px rgba(212, 175, 55, 0.4);">
+        <div id="victory-panel" style="display:none; background: rgba(0,0,0,0.9); padding: 40px; border: 4px solid gold; border-radius: 20px; flex-direction: column; gap: 25px; align-items: center; box-shadow: 0 0 100px rgba(212, 175, 55, 0.4); z-index: 2000;">
             <div id="victory-name" style="color: gold; font-weight: bold; font-size: 36px; text-shadow: 0 0 20px rgba(255, 215, 0, 0.5);">PLAYER WINS!</div>
-            <div style="color: #fff; font-size: 18px;">Congratulations on your victory.</div>
+            <div id="victory-turns" style="color: #fff; font-size: 18px; font-weight: bold; padding: 5px 15px; background: rgba(255,215,0,0.2); border-radius: 20px; display: none;">Game lasted for 0 turns.</div>
+            <div id="victory-congrats" style="color: #fff; font-size: 18px;">Congratulations on your victory.</div>
+            
+            <div id="desert-graph-container" style="display: none; flex-direction: column; align-items: center; gap: 10px; width: 100%; max-width: 400px; padding: 15px; background: rgba(0,0,0,0.4); border-radius: 12px; border: 1px solid #f4a460;">
+                <div style="color: #f4a460; font-size: 14px; font-weight: bold;">World Desertification Over Time</div>
+                <canvas id="desertGraph" width="360" height="120" style="width: 100%; height: 120px;"></canvas>
+            </div>
+
             <div style="display: flex; gap: 15px; width: 100%;">
                 <button id="replayBtn" style="flex: 1; padding: 15px; background: #2ecc71; font-size: 18px;">Replay</button>
                 <button id="newGameBtn" style="flex: 1; padding: 15px; background: #3498db; font-size: 18px;">New Game</button>
@@ -639,6 +700,11 @@
                     <button id="endBtn" disabled>End Turn</button>
                     <button id="gameAbandonBtn" style="background: #e74c3c; display: none; font-size: 11px;">Abandon Game</button>
                     <button id="resetCamBtn" style="background: #7f8c8d; font-size: 11px;">Reset View</button>
+                    
+                    <div style="display: flex; align-items: center; gap: 5px; background: rgba(0,0,0,0.3); padding: 5px 8px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.2);">
+                        <input type="checkbox" id="toggleDiceAnim" checked style="cursor: pointer;">
+                        <label for="toggleDiceAnim" style="font-size: 10px; cursor: pointer; white-space: nowrap; margin: 0; user-select: none;">Dice Anim</label>
+                    </div>
                 </div>
                 <div id="dev-card-container" style="display:flex; gap:5px; margin-top:5px; flex-wrap:wrap; justify-content:center;"></div>
             </div>

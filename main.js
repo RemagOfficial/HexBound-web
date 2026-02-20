@@ -288,6 +288,7 @@ class Player {
     this.devCards = []; // Owned but unplayed cards (except VP)
     this.playedKnights = 0;
     this.newDevCardThisTurnIdx = -1; // Prevent playing a card on the same turn it was bought
+    this.isEliminated = false;
   }
 
   toJSON() {
@@ -297,6 +298,7 @@ class Player {
       settlements: this.settlements, cities: this.cities, roads: this.roads,
       victoryPoints: this.victoryPoints, visibleVP: this.visibleVP,
       playedKnights: this.playedKnights,
+      isEliminated: !!this.isEliminated,
       devCards: this.devCards.map(c => ({ t: c.type, b: c.boughtTurn })),
       newDevCardThisTurnIdx: this.newDevCardThisTurnIdx,
       waitingForSettlement: this.waitingForSettlement
@@ -369,11 +371,17 @@ class Rules {
 
 // --- LOGIC: GAMESTATE ---
 class GameState {
-  constructor(board, players, targetScore = 10, friendlyRobber = false, aiDifficulty = 'Normal', multiRobber = false) {
+  constructor(board, players, targetScore = 10, friendlyRobber = false, aiDifficulty = 'Normal', multiRobber = false, gameMode = 'Standard', expansionInterval = '2', desertNewChance = 0.1, desertDecayChance = 0.2) {
     this.board = board; this.players = players; this.currentPlayerIdx = 0;
     this.targetScore = targetScore; this.friendlyRobber = friendlyRobber;
     this.aiDifficulty = aiDifficulty;
     this.multiRobber = multiRobber;
+    this.gameMode = gameMode;
+    this.expansionInterval = expansionInterval;
+    this.desertNewChance = desertNewChance;
+    this.desertDecayChance = desertDecayChance;
+    this.nextExpansionRotations = 0; // Will be set after first rotation or game start
+    this.maxRadiusCycles = 0; // Tracks cycles after hitting radius 25
     this.phase = 'INITIAL'; this.dice = [1, 1]; this.history = [];
     this.initialPlacements = 0; this.winner = null; this.hasRolled = false;
     this.pendingSettlement = null; this.movingRobber = false;
@@ -393,11 +401,25 @@ class GameState {
     this.activeTrade = null;
     this.tradeTimer = null;
     this.turnToken = 0;
+    this.rotations = 0;
+    this.turnsInRotation = 0;
     this.waitingForDiscards = []; // Array of ids who must discard
     this.aiTradeAttempts = 0; // Track AI trade attempts per turn
     this.playedDevCardThisTurn = false;
     this.pendingRoads = 0;
     this.started = false;
+
+    // Track desert percentage history for victory graph
+    this.desertHistory = [];
+    if (this.gameMode === 'Expanding Board (Experimental)') {
+        const hexes = Array.from(this.board.hexes.values());
+        const desertCount = hexes.filter(h => h.terrain === HEX_TYPES.DESERT).length;
+        this.desertHistory.push(Math.round((desertCount / hexes.length) * 100));
+    }
+
+    if (this.gameMode === 'Expanding Board (Experimental)') {
+        this.nextExpansionRotations = this.calculateNextExpansion();
+    }
     
     // Bank Resources initialization
     // Standard (4p): 19, Large (6p): 24, XL (8p): 30, Colossal (10p): 36, Hell: 200
@@ -437,6 +459,19 @@ class GameState {
     this.largestArmySize = 2; // Need 3 to take it
     
     this.log(`Initial Phase: Goal is ${targetScore} Points (${aiDifficulty} AI)`);
+    if (this.gameMode === 'Expanding Board (Experimental)') {
+        this.log(`Mode: Expanding Board (Every ${this.expansionInterval === 'Random' ? 'Random' : this.expansionInterval} rotations)`);
+    }
+  }
+
+  calculateNextExpansion() {
+      // If expansion interval is set to Random, pick a number between 1 and 4 
+      // (leaning towards 2-3 to keep it playable but surprising)
+      if (this.expansionInterval === 'Random') {
+          const weights = [1, 2, 2, 3, 3, 4]; // Every 1 to 4 rotations
+          return this.rotations + weights[Math.floor(Math.random() * weights.length)];
+      }
+      return this.rotations + parseInt(this.expansionInterval);
   }
 
   toJSON() {
@@ -446,10 +481,19 @@ class GameState {
       currentPlayerIdx: (this.currentPlayerIdx === undefined) ? null : this.currentPlayerIdx,
       phase: (this.phase === undefined) ? 'INITIAL' : this.phase,
       turnToken: (this.turnToken === undefined) ? 0 : this.turnToken,
+      rotations: this.rotations || 0,
+      turnsInRotation: this.turnsInRotation || 0,
       hasRolled: !!this.hasRolled,
       dice: this.dice || [1, 1],
       robberHexIds: (this.robberHexIds === undefined) ? [] : this.robberHexIds,
       multiRobber: !!this.multiRobber,
+      gameMode: this.gameMode || 'Standard',
+      expansionInterval: this.expansionInterval || '2',
+      desertNewChance: this.desertNewChance || 0,
+      desertDecayChance: this.desertDecayChance || 0,
+      nextExpansionInterval: this.nextExpansionInterval || 0,
+      maxRadiusCycles: this.maxRadiusCycles || 0,
+      nextExpansionRotations: this.nextExpansionRotations || 0,
       selectedRobberIdx: (this.selectedRobberIdx === undefined) ? null : this.selectedRobberIdx,
       movingRobber: !!this.movingRobber,
       waitingToPickVictim: !!this.waitingToPickVictim,
@@ -471,6 +515,7 @@ class GameState {
       targetScore: (this.targetScore === undefined) ? 10 : this.targetScore,
       friendlyRobber: !!this.friendlyRobber,
       aiDifficulty: this.aiDifficulty || 'Normal',
+      desertHistory: this.desertHistory || [],
       started: !!this.started
     };
   }
@@ -532,7 +577,7 @@ class GameState {
   static fromJSON(data) {
     const board = Board.fromJSON(data.board);
     const players = data.players.map(pData => Player.fromJSON(pData));
-    const gs = new GameState(board, players, data.targetScore, data.friendlyRobber, data.aiDifficulty);
+    const gs = new GameState(board, players, data.targetScore, data.friendlyRobber, data.aiDifficulty, data.multiRobber, data.gameMode, data.expansionInterval || '2', data.desertNewChance || 0, data.desertDecayChance || 0);
     gs.fromJSON(data);
     return gs;
   }
@@ -707,7 +752,37 @@ class GameState {
   
   nextTurn() {
     this.turnToken++;
-    this.currentPlayerIdx = (this.currentPlayerIdx + 1) % this.players.length;
+    
+    // Find the next player who isn't eliminated
+    const oldIdx = this.currentPlayerIdx;
+    let nextIdx = (oldIdx + 1) % this.players.length;
+    let attempts = 0;
+    while (this.players[nextIdx].isEliminated && attempts < this.players.length) {
+        nextIdx = (nextIdx + 1) % this.players.length;
+        attempts++;
+    }
+    this.currentPlayerIdx = nextIdx;
+    
+    // Board Expansion & Cycle Handling:
+    // A rotation has passed if we wrapped around through index 0 (even if P0 is eliminated)
+    const passedZero = (this.currentPlayerIdx <= oldIdx);
+
+    if (passedZero) {
+        this.rotations++;
+        if (this.gameMode === 'Expanding Board (Experimental)' && this.rotations >= this.nextExpansionRotations && this.rotations > 0) {
+            this.expandBoard();
+            this.nextExpansionRotations = this.calculateNextExpansion();
+        }
+
+        // Record desert history trend per rotation for the victory graph
+        if (this.gameMode === 'Expanding Board (Experimental)') {
+          const hexes = Array.from(this.board.hexes.values());
+          const desertCount = hexes.filter(h => h.terrain === HEX_TYPES.DESERT).length;
+          const currentPct = Math.round((desertCount / hexes.length) * 100);
+          this.desertHistory.push(currentPct);
+        }
+    }
+
     this.hasRolled = false;
     this.aiTradeAttempts = 0; // Reset for the next player
     this.playedDevCardThisTurn = false;
@@ -716,6 +791,12 @@ class GameState {
     if (this.activeTrade) this.clearTrade();
 
     this.players.forEach(p => p.calculateVP(this.longestRoadHolderId, this.largestArmyHolderId));
+    
+    // Elimination check for Expanding Board mode
+    if (this.gameMode === 'Expanding Board (Experimental)' && this.phase === 'PLAY') {
+        this.checkEliminations();
+    }
+
     this.checkWinner();
     if (this.winner) return;
 
@@ -733,6 +814,217 @@ class GameState {
       const token = this.turnToken;
       setTimeout(() => { if (token === this.turnToken) this.aiTurn(); }, 1000);
     }
+  }
+
+  expandBoard() {
+    const MAX_EXPANSION_RADIUS = 25;
+    const canExpandByRadius = this.board.radius < MAX_EXPANSION_RADIUS;
+
+    if (canExpandByRadius) {
+        this.log("⚠️ THE WORLD IS GROWING! The board has expanded.");
+        const oldRadius = this.board.radius;
+        
+        // 1. Identify "Edge" objects before expansion
+        // A coastline vertex has a port or touches only 1 hex or is just generally at the boundary
+        const edgeTolerance = 5;
+        const maxDist = Math.max(...Array.from(this.board.vertices.values()).map(v => Math.hypot(v.x, v.y)));
+        
+        const edgePieces = {
+            settlements: [],
+            cities: [],
+            roads: [],
+            ports: []
+        };
+
+        this.players.forEach(p => {
+            p.settlements.forEach(vId => {
+                const v = this.board.getVertex(vId);
+                if (v && Math.hypot(v.x, v.y) > maxDist - edgeTolerance) edgePieces.settlements.push({ pId: p.id, oldV: v });
+            });
+            p.cities.forEach(vId => {
+                const v = this.board.getVertex(vId);
+                if (v && Math.hypot(v.x, v.y) > maxDist - edgeTolerance) edgePieces.cities.push({ pId: p.id, oldV: v });
+            });
+            p.roads.forEach(eId => {
+                const e = this.board.getEdge(eId);
+                const v1 = this.board.getVertex(e.v1), v2 = this.board.getVertex(e.v2);
+                if (e && Math.hypot(v1.x + v2.x, v1.y + v2.y) / 2 > maxDist - edgeTolerance) edgePieces.roads.push({ pId: p.id, oldE: e });
+            });
+        });
+
+        // 2. Increase Radius and Add Hexes
+        this.board.radius++;
+        const newRadius = this.board.radius;
+        const terrainTypes = Object.values(HEX_TYPES).filter(t => t.name !== 'Water' && t.name !== 'Desert');
+        const possibleNums = [2, 3, 3, 4, 4, 5, 5, 6, 6, 8, 8, 9, 9, 10, 10, 11, 11, 12];
+        
+        // Random chance for an existing internal hex to wither into a Desert
+        // This pushes players towards the expanding edge to find new resources
+        if (this.desertDecayChance > 0 && Math.random() < this.desertDecayChance) {
+            const hexKeys = Array.from(this.board.hexes.keys());
+            const targetKey = hexKeys[Math.floor(Math.random() * hexKeys.length)];
+            const targetHex = this.board.hexes.get(targetKey);
+            if (targetHex && targetHex.terrain !== HEX_TYPES.DESERT) {
+                this.log(`⚠️ DISASTER: The resource hex at ${targetKey} has withered into a desert!`);
+                targetHex.terrain = HEX_TYPES.DESERT;
+                targetHex.number = null;
+                // If multi-robber is enabled, add a new robber to this new desert
+                if (this.multiRobber) {
+                    this.robberHexIds.push(targetKey);
+                }
+            }
+        }
+
+        for (let q = -newRadius; q <= newRadius; q++) {
+            for (let r = Math.max(-newRadius, -q - newRadius); r <= Math.min(newRadius, -q + newRadius); r++) {
+                const key = `${q},${r}`;
+                if (!this.board.hexes.has(key)) {
+                    // Chance for new hexes to be Deserts
+                    const isDesert = this.desertNewChance > 0 && Math.random() < this.desertNewChance;
+                    if (isDesert) {
+                        this.board.hexes.set(key, { q, r, terrain: HEX_TYPES.DESERT, number: null, vertices: [], edges: [] });
+                        if (this.multiRobber) {
+                            this.robberHexIds.push(key);
+                            this.log("Extra Robber spawned on new desert.");
+                        }
+                    } else {
+                        const terrain = terrainTypes[Math.floor(Math.random() * terrainTypes.length)];
+                        const number = possibleNums[Math.floor(Math.random() * possibleNums.length)];
+                        this.board.hexes.set(key, { q, r, terrain, number, vertices: [], edges: [] });
+                    }
+                }
+            }
+        }
+
+        // 3. Re-calculate internal structures
+        // Clear and rebuild Maps while preserving reference to hexes (which we just expanded)
+        const oldHexes = this.board.hexes;
+        this.board.vertices.clear();
+        this.board.edges.clear();
+        oldHexes.forEach(hex => {
+            hex.vertices = []; hex.edges = []; // Reset hex links
+            const hexVertices = this.board.getHexVertexPositions(hex.q, hex.r);
+            const hexVKeys = [];
+            hexVertices.forEach(pos => {
+                const vx = Math.round(pos.x * 100) / 100;
+                const vy = Math.round(pos.y * 100) / 100;
+                const vKey = `${vx},${vy}`;
+                if (!this.board.vertices.has(vKey)) {
+                    this.board.vertices.set(vKey, new Vertex(vKey, vx, vy));
+                }
+                const v = this.board.vertices.get(vKey);
+                if (!v.hexes.includes(hex)) v.hexes.push(hex);
+                hex.vertices.push(vKey);
+                hexVKeys.push(vKey);
+            });
+
+            for (let i = 0; i < 6; i++) {
+                const v1 = hexVKeys[i], v2 = hexVKeys[(i + 1) % 6];
+                const eKey = [v1, v2].sort().join('|');
+                if (!this.board.edges.has(eKey)) this.board.edges.set(eKey, new Edge(eKey, v1, v2));
+                hex.edges.push(eKey);
+            }
+        });
+
+        // 4. Restore Internal and Handle Pushed Pieces
+        // Current players already have IDs pointing to $(x,y)$.
+        // Internal pieces stay exactly where they were by virtue of coordinate consistency.
+        // Edge pieces need to be moved to the new maximum distance.
+        const scale = (oldRadius + 1) / oldRadius;
+        const newVertices = Array.from(this.board.vertices.values());
+        const newEdges = Array.from(this.board.edges.values());
+
+        edgePieces.settlements.forEach(s => {
+            const nx = s.oldV.x * scale, ny = s.oldV.y * scale;
+            let nearest = newVertices[0]; let minDist = Infinity;
+            newVertices.forEach(nv => {
+                const d = Math.hypot(nv.x - nx, nv.y - ny);
+                if (d < minDist) { minDist = d; nearest = nv; }
+            });
+            const p = this.players[s.pId];
+            p.settlements = p.settlements.map(id => id === s.oldV.id ? nearest.id : id);
+            this.board.getVertex(nearest.id).ownerId = s.pId;
+        });
+
+        edgePieces.cities.forEach(c => {
+            const nx = c.oldV.x * scale, ny = c.oldV.y * scale;
+            let nearest = newVertices[0]; let minDist = Infinity;
+            newVertices.forEach(nv => {
+                const d = Math.hypot(nv.x - nx, nv.y - ny);
+                if (d < minDist) { minDist = d; nearest = nv; }
+            });
+            const p = this.players[c.pId];
+            p.cities = p.cities.map(id => id === c.oldV.id ? nearest.id : id);
+            const v = this.board.getVertex(nearest.id);
+            v.ownerId = c.pId; v.isCity = true;
+        });
+
+        edgePieces.roads.forEach(r => {
+            const v1 = this.board.getVertex(r.oldE.v1), v2 = this.board.getVertex(r.oldE.v2);
+            const midXR = (v1.x + v2.x) / 2, midYR = (v1.y + v2.y) / 2;
+            const nx = midXR * scale, ny = midYR * scale;
+            let nearest = newEdges[0]; let minDist = Infinity;
+            newEdges.forEach(ne => {
+                const nv1 = this.board.getVertex(ne.v1), nv2 = this.board.getVertex(ne.v2);
+                const midX = (nv1.x + nv2.x) / 2, midY = (nv1.y + nv2.y) / 2;
+                const d = Math.hypot(midX - nx, midY - ny);
+                if (d < minDist) { minDist = d; nearest = ne; }
+            });
+            const p = this.players[r.pId];
+            p.roads = p.roads.map(id => id === r.oldE.id ? nearest.id : id);
+            nearest.ownerId = r.pId;
+        });
+    } else {
+        // Radius limit reached, we ONLY apply the wither/decay logic, but faster
+        // AND getting more hostile over time
+        this.maxRadiusCycles++;
+        
+        // Probability increases by 10% each cycle after reaching max size, capped at 100%
+        const bonusProb = this.maxRadiusCycles * 0.1;
+        const currentDecayChance = Math.min(1.0, (this.desertDecayChance * 2) + bonusProb);
+        
+        // Number of attempts also increases over time (starts at 3, +1 every 2 cycles)
+        const deathSpeed = 3 + Math.floor(this.maxRadiusCycles / 2);
+
+        if (this.maxRadiusCycles % 3 === 0) {
+            this.log(`💀 THE SPREAD ACCELERATES: The wasteland continues to grow...`);
+        }
+
+        for (let i = 0; i < deathSpeed; i++) {
+            if (this.desertDecayChance > 0 && Math.random() < currentDecayChance) {
+                const hexKeys = Array.from(this.board.hexes.keys());
+                const targetKey = hexKeys[Math.floor(Math.random() * hexKeys.length)];
+                const targetHex = this.board.hexes.get(targetKey);
+                if (targetHex && targetHex.terrain !== HEX_TYPES.DESERT) {
+                    this.log(`⚠️ DISASTER: THE WORLD IS DYING! The hex at ${targetKey} has withered into a desert!`);
+                    targetHex.terrain = HEX_TYPES.DESERT;
+                    targetHex.number = null;
+                    if (this.multiRobber) {
+                        this.robberHexIds.push(targetKey);
+                    }
+                }
+            }
+        }
+    }
+
+    // 5. Place pieces that were internal
+    this.players.forEach(p => {
+        p.settlements.forEach(vId => { 
+            const v = this.board.getVertex(vId);
+            if (v) v.ownerId = p.id;
+        });
+        p.cities.forEach(vId => { 
+            const v = this.board.getVertex(vId);
+            if (v) { v.ownerId = p.id; v.isCity = true; }
+        });
+        p.roads.forEach(eId => { 
+            const e = this.board.getEdge(eId);
+            if (e) e.ownerId = p.id;
+        });
+    });
+
+    this.board.generatePorts();
+    if (gameSync.isMultiplayer && gameSync.isHost) gameSync.update(this, true);
   }
 
   aiTurn() {
@@ -853,6 +1145,15 @@ class GameState {
     if (v.port && this.aiDifficulty !== 'Beginner') {
         value += (this.phase === 'INITIAL') ? -1.5 : 1.5;
     }
+    
+    // Expanding Board: Strongly boost preference for edge/coastline tiles to ensure growth
+    if (this.gameMode === 'Expanding Board (Experimental)' && this.aiDifficulty !== 'Beginner') {
+        const dist = Math.hypot(v.x, v.y);
+        const maxDist = (this.board.radius + 1) * 1.5 * (this.board.hexSize || 50);
+        // Extreme preference for expanding - bots will "race" to the edge
+        value += (dist / maxDist) * 7.5; 
+    }
+
     return value;
   }
 
@@ -968,23 +1269,32 @@ class GameState {
         if (madeAction) continue;
 
         // 3. BUILD CITY - Priority for VP and resource boost
+        const inExpMode = (this.gameMode === 'Expanding Board (Experimental)');
+        const canSettleNow = p.canAfford(COSTS.SETTLEMENT) && Array.from(this.board.vertices.keys()).some(v => Rules.canPlaceSettlement(this.board, v, p, 'PLAY'));
+        
         if (p.canAfford(COSTS.CITY) && p.settlements.length > 0) {
-            // Master picks the settlement on highest value tiles
-            let bestS = p.settlements[0];
-            if (diff === 'Master') {
-                let maxVal = -1;
-                p.settlements.forEach(sid => {
-                    const val = this.getVertexValue(sid);
-                    if (val > maxVal) { maxVal = val; bestS = sid; }
-                });
+            // In Expanding mode, bots much more strongly prioritize a Settlement over a City to claim space
+            const settleWeight = inExpMode ? 0.85 : 0.4;
+            if (inExpMode && canSettleNow && Math.random() < settleWeight) {
+                // Skip city this loop to let the settlement logic below catch it
             } else {
-                // Beginner/Skilled pick random/first to be less optimal but still active
-                bestS = p.settlements[Math.floor(Math.random() * p.settlements.length)];
+                // Master picks the settlement on highest value tiles
+                let bestS = p.settlements[0];
+                if (diff === 'Master') {
+                    let maxVal = -1;
+                    p.settlements.forEach(sid => {
+                        const val = this.getVertexValue(sid);
+                        if (val > maxVal) { maxVal = val; bestS = sid; }
+                    });
+                } else {
+                    // Beginner/Skilled pick random/first to be less optimal but still active
+                    bestS = p.settlements[Math.floor(Math.random() * p.settlements.length)];
+                }
+                this.build('CITY', bestS);
+                p.waitingForSettlement = false;
+                madeAction = true;
+                continue;
             }
-            this.build('CITY', bestS);
-            p.waitingForSettlement = false;
-            madeAction = true;
-            continue;
         }
 
         // 3. BUILD SETTLEMENT
@@ -1024,7 +1334,10 @@ class GameState {
                 // SAVING LOGIC: If we have a spot to build a settlement, don't build a road 
                 // UNLESS we have "spare" resources or we are prioritizing Longest Road or we are holding too many resources
                 const missingSetRes = p.resources.WOOD < 1 || p.resources.BRICK < 1 || p.resources.SHEEP < 1 || p.resources.WHEAT < 1;
-                const canSaveForSettlement = hasSettlementSpot && missingSetRes && !prioritizeRoad;
+                let canSaveForSettlement = hasSettlementSpot && missingSetRes && !prioritizeRoad;
+
+                // In Expanding mode, bots are much more reckless and will build roads anyway 85% of the time to race for edges
+                if (inExpMode && Math.random() < 0.85) canSaveForSettlement = false;
 
                 if (canSaveForSettlement && !overLimit) {
                     if (diff === 'Beginner') {
@@ -1060,7 +1373,11 @@ class GameState {
         // 5. BUY DEV CARD
         if (p.canAfford(COSTS.DEV_CARD) && this.devCardDeck.length > 0) {
             // Master AI will buy cards more aggressively if they have excess resources
-            let shouldBuy = (diff === 'Master') ? true : (diff === 'Skilled' ? Math.random() > 0.4 : Math.random() > 0.7);
+            let cardChance = (diff === 'Master') ? 1.0 : (diff === 'Skilled' ? 0.6 : 0.3);
+            let shouldBuy = Math.random() < cardChance;
+            
+            // In Expanding board, cards are vital if the path is blocked
+            if (inExpMode && p.victoryPoints >= 10) shouldBuy = true;
             
             // If we are over limit, the bot is more likely to buy a card to burn resources
             if (overLimit) shouldBuy = true;
@@ -1076,7 +1393,9 @@ class GameState {
 
         // 6. PANIC/FEAR TRADE (Only if over limit and nothing else worked)
         if (!madeAction && overLimit) {
-            let panicChance = (diff === 'Master') ? 1.0 : (diff === 'Skilled' ? 0.5 : 0.1);
+            // Panic chance is higher in Expanding mode as resource needs are urgent
+            let basePanic = (diff === 'Master') ? 1.0 : (diff === 'Skilled' ? 0.5 : 0.1);
+            let panicChance = inExpMode ? Math.min(1.0, basePanic + 0.3) : basePanic;
             if (Math.random() < panicChance) {
                 for (const from of resources) {
                     const trRate = this.getTradeRate(p, from);
@@ -1100,7 +1419,13 @@ class GameState {
   rollDice() {
     if (this.hasRolled) return;
     this.dice = [Math.floor(Math.random()*6)+1, Math.floor(Math.random()*6)+1];
-    this.diceAnim = { value: [...this.dice], timer: 102 };
+    
+    // Look at the in-game UI element for the animation setting
+    const animToggle = document.getElementById('toggleDiceAnim');
+    const shouldAnimate = animToggle ? animToggle.checked : true;
+    
+    this.diceAnim = { value: [...this.dice], timer: shouldAnimate ? 102 : 1 };
+    
     const tot = this.dice[0] + this.dice[1];
     this.log(`${this.currentPlayer.name} rolled ${tot}`);
     this.hasRolled = true;
@@ -1190,12 +1515,21 @@ class GameState {
     // 1. Pick which robber to move (if multiple)
     let robberToMoveIdx = 0;
     if (this.multiRobber) {
-        // AI: Prefer moving a robber that blocks OUR best production
+        // AI: Prefer moving a robber that blocks OUR best production or a high-value tile
         const p = this.players[this.currentPlayerIdx];
-        const ourHexes = this.getHexesControlledBy(p);
+        const ourHexes = Array.from(this.board.hexes.keys()).filter(k => {
+            const h = this.board.hexes.get(k);
+            return h.vertices.some(vk => this.board.getVertex(vk).ownerId === p.id);
+        });
+        
+        // Find which robber is on one of our hexes
         const myBlockedIdx = this.robberHexIds.findIndex(rid => ourHexes.includes(rid));
-        if (myBlockedIdx !== -1) robberToMoveIdx = myBlockedIdx;
-        else robberToMoveIdx = Math.floor(Math.random() * this.robberHexIds.length);
+        if (myBlockedIdx !== -1) {
+            robberToMoveIdx = myBlockedIdx;
+        } else {
+            // Otherwise move a random one, but lean towards the one that moved least recently or is on a desert
+            robberToMoveIdx = Math.floor(Math.random() * this.robberHexIds.length);
+        }
     }
     this.selectedRobberIdx = robberToMoveIdx;
 
@@ -1634,13 +1968,77 @@ class GameState {
     return maxSub;
   }
 
+  checkEliminations() {
+    this.players.forEach(p => {
+        if (p.isEliminated || p.id === -1) return;
+
+        // Condition 1: Can they generate resources?
+        let hasPotentialIncome = false;
+        const structures = [...p.settlements, ...p.cities];
+        structures.forEach(vId => {
+            const v = this.board.getVertex(vId);
+            if (!v) return;
+            v.hexes.forEach(hex => {
+                // If it's a resource hex with a number, there is income potential
+                if (hex.terrain !== HEX_TYPES.DESERT && hex.terrain !== HEX_TYPES.WATER && hex.number !== null) {
+                    hasPotentialIncome = true;
+                }
+            });
+        });
+
+        if (hasPotentialIncome) return; // Not eliminated if they have income
+
+        // Condition 2: Can they build anything right now?
+        const canBuildNow = p.canAfford(COSTS.ROAD) || 
+                            p.canAfford(COSTS.SETTLEMENT) || 
+                            p.canAfford(COSTS.CITY) || 
+                            p.canAfford(COSTS.DEV_CARD);
+
+        if (canBuildNow) return; // Not eliminated if they can still build
+
+        // Condition 3: Can they trade anything right now?
+        // Check for specific ports or bank 4:1
+        let hasGenericPort = false;
+        const specificPorts = new Set();
+        structures.forEach(vId => {
+            const v = this.board.getVertex(vId);
+            if (v && v.port) {
+                if (v.port === '?') hasGenericPort = true;
+                else if (typeof v.port === 'string') specificPorts.add(v.port);
+            }
+        });
+
+        let canTrade = false;
+        const resources = ['WOOD', 'BRICK', 'SHEEP', 'WHEAT', 'ORE'];
+        resources.forEach(r => {
+            const amt = p.resources[r] || 0;
+            if (amt >= 4) canTrade = true;
+            if (hasGenericPort && amt >= 3) canTrade = true;
+            if (specificPorts.has(r) && amt >= 2) canTrade = true;
+        });
+
+        if (canTrade) return; // Not eliminated if they can still trade to find a solution
+
+        // If you have no income, can't build, and can't trade, you are out.
+        p.isEliminated = true;
+        this.log(`💀 ELIMINATION: ${p.name} has no income and no remaining moves. They have been consumed by the sands.`);
+    });
+
+    const activePlayers = this.players.filter(p => !p.isEliminated);
+    if (activePlayers.length === 0 && !this.winner) {
+        this.winner = { name: "The Desert", id: -1, color: "#f4a460", isEnvironment: true };
+        this.log("🏜️ TOTAL DEFEAT: All players have been eliminated. The Desert wins.");
+    }
+  }
+
   checkWinner() { 
     this.players.forEach(p => { 
+        if (p.id === -1) return; // "The Desert" is not a player
         if (p.calculateVP(this.longestRoadHolderId, this.largestArmyHolderId) >= this.targetScore) {
             if (!this.winner) {
                 this.winner = p;
                 // If only bots mode, restart after 5 seconds
-                const allBots = this.players.every(pl => pl.isBot);
+                const allBots = this.players.filter(pl => pl.id !== -1).every(pl => pl.isBot);
                 if (allBots) {
                     this.log(`Game Over! Restarting in 5s...`);
                     // Use the replay button's logic which preserves the Only Bots settings
@@ -1665,6 +2063,13 @@ class CanvasRenderer {
     this.logo.src = 'assets/HexBound_logo.png';
   }
   render(gs, hover) {
+    // Check if user still wants animation; if not, finish immediately
+    const animToggle = document.getElementById('toggleDiceAnim');
+    const shouldAnimate = animToggle ? animToggle.checked : true;
+    if (!shouldAnimate && gs.diceAnim.timer > 1) {
+        gs.diceAnim.timer = 1;
+    }
+
     if (gs.diceAnim.timer > 0) {
         gs.diceAnim.timer--;
         // Randomize dice values during the "shaking" phase (first 0.5s / 30 frames)
@@ -2017,7 +2422,7 @@ class CanvasRenderer {
     }
 
     // --- RIGHT PANEL: GAME STATS ---
-    const STATS_WIDTH = isMobile ? 180 : 240;
+    const STATS_WIDTH = isMobile ? 180 : 300;
     const rx = this.canvas.width - STATS_WIDTH - 10;
     const ry = 10;
     
@@ -2033,14 +2438,30 @@ class CanvasRenderer {
     this.ctx.font = isMobile ? 'bold 11px Arial' : 'bold 14px Arial';
     this.ctx.fillText('GAME STATS', rx + 15, ry + 15);
 
+    // Desert percentage and radius for expanding board
+    let statusText = "";
+    if (gs.gameMode === 'Expanding Board (Experimental)') {
+        const hexes = Array.from(gs.board.hexes.values());
+        const desertCount = hexes.filter(h => h.terrain === HEX_TYPES.DESERT).length;
+        const desertPct = Math.round((desertCount / hexes.length) * 100);
+        statusText = `Radius: ${gs.board.radius} | Desert: ${desertPct}% | Turns: ${gs.rotations}`;
+    } else {
+        statusText = `Turns: ${gs.rotations}`;
+    }
+    
+    this.ctx.fillStyle = (gs.gameMode === 'Expanding Board (Experimental)') ? '#f4a460' : '#fff';
+    this.ctx.font = isMobile ? 'bold 9px Arial' : 'bold 11px Arial';
+    const textWidth = this.ctx.measureText(statusText).width;
+    this.ctx.fillText(statusText, rx + STATS_WIDTH - textWidth - 15, ry + 15);
+
     // Header for Table
     this.ctx.font = isMobile ? '8px Arial' : '10px Arial';
     this.ctx.fillStyle = '#aaa';
     this.ctx.fillText('PLAYER', rx + 15, ry + (isMobile ? 30 : 40));
-    this.ctx.fillText('VP', rx + (isMobile ? 100 : 120), ry + (isMobile ? 30 : 40));
-    this.ctx.fillText('RD', rx + (isMobile ? 123 : 148), ry + (isMobile ? 30 : 40));
-    this.ctx.fillText('DEV', rx + (isMobile ? 143 : 173), ry + (isMobile ? 30 : 40));
-    this.ctx.fillText('RES', rx + (isMobile ? 168 : 203), ry + (isMobile ? 30 : 40));
+    this.ctx.fillText('VP', rx + (isMobile ? 100 : 160), ry + (isMobile ? 30 : 40));
+    this.ctx.fillText('RD', rx + (isMobile ? 123 : 188), ry + (isMobile ? 30 : 40));
+    this.ctx.fillText('DEV', rx + (isMobile ? 143 : 213), ry + (isMobile ? 30 : 40));
+    this.ctx.fillText('RES', rx + (isMobile ? 168 : 253), ry + (isMobile ? 30 : 40));
 
     let py = ry + (isMobile ? 45 : 60);
     gs.players.forEach(p => {
@@ -2049,7 +2470,7 @@ class CanvasRenderer {
       let nameText = p.name;
       if (gs.longestRoadHolderId === p.id) nameText += ' 🏆';
       if (gs.largestArmyHolderId === p.id) nameText += ' ⚔️';
-      this.ctx.fillText(nameText.substring(0, isMobile ? 10 : 12), rx + 15, py);
+      this.ctx.fillText(nameText.substring(0, isMobile ? 10 : 20), rx + 15, py);
       
       this.ctx.fillStyle = '#fff';
       this.ctx.font = isMobile ? '10px Arial' : '12px Arial';
@@ -2059,19 +2480,19 @@ class CanvasRenderer {
       if (vpCardsCount > 0 && (p.id === gameSync.localPlayerId || gs.winner)) {
         vpText += ` (${p.visibleVP + vpCardsCount})`;
       }
-      this.ctx.fillText(vpText, rx + (isMobile ? 100 : 120), py);
+      this.ctx.fillText(vpText, rx + (isMobile ? 100 : 160), py);
 
-      this.ctx.fillText(gs.calculateLongestPath(p.id), rx + (isMobile ? 123 : 148), py);
-      this.ctx.fillText(p.devCards.length.toString(), rx + (isMobile ? 143 : 173), py);
+      this.ctx.fillText(gs.calculateLongestPath(p.id), rx + (isMobile ? 123 : 188), py);
+      this.ctx.fillText(p.devCards.length.toString(), rx + (isMobile ? 143 : 213), py);
       const totalRes = Object.values(p.resources).reduce((a, b) => a + b, 0);
       
       if (totalRes > 7) {
         this.ctx.fillStyle = '#ff4444'; // Red for danger
         this.ctx.font = isMobile ? 'bold 10px Arial' : 'bold 12px Arial';
-        this.ctx.fillText(totalRes + ' ⚠️', rx + (isMobile ? 168 : 203), py);
+        this.ctx.fillText(totalRes + ' ⚠️', rx + (isMobile ? 168 : 253), py);
       } else {
         this.ctx.fillStyle = '#fff';
-        this.ctx.fillText(totalRes, rx + (isMobile ? 168 : 203), py);
+        this.ctx.fillText(totalRes, rx + (isMobile ? 168 : 253), py);
       }
       py += isMobile ? 16 : 20;
     });
@@ -2090,7 +2511,7 @@ class CanvasRenderer {
         this.ctx.fillStyle = '#ccc';
         const recentHistory = gs.history.slice(-historyCount).reverse();
         recentHistory.forEach(h => {
-          const displayLog = h.length > 40 ? h.substring(0, 37) + '...' : h;
+          const displayLog = h.length > 55 ? h.substring(0, 52) + '...' : h;
           this.ctx.fillText(displayLog, rx + 15, py);
           py += 14;
         });
@@ -2391,6 +2812,9 @@ function updateMenuOptions() {
   const limits = { '1': 8, '2': 15, '3': 25, '4': 35, '5': 50, '19': 100 };
   const playerCap = { '1': 3, '2': 4, '3': 6, '4': 8, '5': 10, '19': 38 };
 
+  const isExpSolo = (gmSolo && gmSolo.value === 'Expanding Board (Experimental)');
+  const isExpHost = (gmHost && gmHost.value === 'Expanding Board (Experimental)');
+
   // Solo limits
   if (boardSolo && winSolo) {
       const radiusVal = boardSolo.value;
@@ -2408,27 +2832,103 @@ function updateMenuOptions() {
       });
       if (parseInt(aiCountSelect.value) > maxAIs) aiCountSelect.value = maxAIs.toString();
       
-      const maxPoints = limits[radiusVal] || 15;
+      const maxPoints = isExpSolo ? 30 : (limits[radiusVal] || 15);
       winSolo.max = maxPoints;
+      winSolo.min = isExpSolo ? "14" : "3";
       if (parseInt(winSolo.value) > maxPoints) winSolo.value = maxPoints;
+      if (parseInt(winSolo.value) < parseInt(winSolo.min)) winSolo.value = winSolo.min;
       if (winSoloVal) winSoloVal.innerText = winSolo.value;
   }
 
   // Host limits
   if (boardHost && winHost) {
       const radiusVal = boardHost.value;
-      const maxHost = limits[radiusVal] || 15;
-      winHost.max = maxHost;
-      if (parseInt(winHost.value) > maxHost) winHost.value = maxHost;
+      const maxPoints = isExpHost ? 30 : (limits[radiusVal] || 15);
+      winHost.max = maxPoints;
+      winHost.min = isExpHost ? "14" : "3";
+      if (parseInt(winHost.value) > maxPoints) winHost.value = maxPoints;
+      if (parseInt(winHost.value) < parseInt(winHost.min)) winHost.value = winHost.min;
       if (winHostVal) winHostVal.innerText = winHost.value;
   }
+
+  // Desert Chance labels Solo
+  const dNewS = document.getElementById('desertNewSolo');
+  const dNewValS = document.getElementById('desertNewValueSolo');
+  if (dNewS && dNewValS) dNewValS.innerText = dNewS.value;
+  const dDecayS = document.getElementById('desertDecaySolo');
+  const dDecayValS = document.getElementById('desertDecayValueSolo');
+  if (dDecayS && dDecayValS) dDecayValS.innerText = dDecayS.value;
+
+  // Desert Chance labels Host
+  const dNewH = document.getElementById('desertNewHost');
+  const dNewValH = document.getElementById('desertNewValueHost');
+  if (dNewH && dNewValH) dNewValH.innerText = dNewH.value;
+  const dDecayH = document.getElementById('desertDecayHost');
+  const dDecayValH = document.getElementById('desertDecayValueHost');
+  if (dDecayH && dDecayValH) dDecayValH.innerText = dDecayH.value;
 }
 
 if (boardSolo) boardSolo.onchange = updateMenuOptions;
 if (boardHost) boardHost.onchange = updateMenuOptions;
 if (winSolo) winSolo.oninput = updateMenuOptions;
 if (winHost) winHost.oninput = updateMenuOptions;
+
+// Track oninput for desert sliders
+document.getElementById('desertNewSolo').oninput = updateMenuOptions;
+document.getElementById('desertDecaySolo').oninput = updateMenuOptions;
+document.getElementById('desertNewHost').oninput = updateMenuOptions;
+document.getElementById('desertDecayHost').oninput = updateMenuOptions;
+
+// Toggle board size visibility based on game mode
+const gmSolo = document.getElementById('gameModeSolo');
+const gmHost = document.getElementById('gameModeHost');
+const bsSoloGroup = document.getElementById('boardSizeSoloGroup');
+const bsHostGroup = document.getElementById('boardSizeHostGroup');
+const eiSoloGroup = document.getElementById('expansionIntervalSoloGroup');
+const eiHostGroup = document.getElementById('expansionIntervalHostGroup');
+const edSoloGroup = document.getElementById('expansionDesertSoloGroup');
+const edHostGroup = document.getElementById('expansionDesertHostGroup');
+
+function updateModeVisibility() {
+    if (gmSolo && bsSoloGroup && eiSoloGroup && edSoloGroup) {
+        const isExp = (gmSolo.value === 'Expanding Board (Experimental)');
+        bsSoloGroup.style.display = isExp ? 'none' : 'block';
+        eiSoloGroup.style.display = isExp ? 'block' : 'none';
+        edSoloGroup.style.display = isExp ? 'block' : 'none';
+        
+        const wpInput = document.getElementById('winPointsSolo');
+        const wpValue = document.getElementById('winPointsValueSolo');
+        if (wpInput) {
+            wpInput.min = isExp ? "14" : "3";
+            if (parseInt(wpInput.value) < parseInt(wpInput.min)) {
+                wpInput.value = wpInput.min;
+                if (wpValue) wpValue.innerText = wpInput.value;
+            }
+        }
+    }
+    if (gmHost && bsHostGroup && eiHostGroup && edHostGroup) {
+        const isExp = (gmHost.value === 'Expanding Board (Experimental)');
+        bsHostGroup.style.display = isExp ? 'none' : 'block';
+        eiHostGroup.style.display = isExp ? 'block' : 'none';
+        edHostGroup.style.display = isExp ? 'block' : 'none';
+
+        const wpInput = document.getElementById('winPointsHost');
+        const wpValue = document.getElementById('winPointsValueHost');
+        if (wpInput) {
+            wpInput.min = isExp ? "14" : "3";
+            if (parseInt(wpInput.value) < parseInt(wpInput.min)) {
+                wpInput.value = wpInput.min;
+                if (wpValue) wpValue.innerText = wpInput.value;
+            }
+        }
+    }
+}
+
+if (gmSolo) gmSolo.onchange = () => { updateModeVisibility(); updateMenuOptions(); };
+if (gmHost) gmHost.onchange = () => { updateModeVisibility(); updateMenuOptions(); };
+
 updateMenuOptions();
+updateModeVisibility();
 
 // Toast notification helper
 function showToast(message, type = 'info') {
@@ -2945,10 +3445,12 @@ class GameSync {
                     const wp = initialConfig?.winPoints || 10;
                     const fr = initialConfig?.friendlyRobber || false;
                     const mr = initialConfig?.multiRobber || false;
+                    const gm = initialConfig?.gameMode || 'Standard';
+                    const ei = initialConfig?.expansionInterval || '2';
 
                     const p0 = new Player(0, myName, PLAYER_COLORS[0], false);
                     const initialBoard = new Board(br);
-                    const initialGs = new GameState(initialBoard, [p0], wp, fr, "Skilled", mr);
+                    const initialGs = new GameState(initialBoard, [p0], wp, fr, "Skilled", mr, gm, ei);
                     transaction.set(this.gameRef, initialGs.toJSON());
                 } else {
                     const data = doc.data();
@@ -3178,7 +3680,13 @@ function getProfileName() {
 function resetGame(config) {
   lastGameConfig = config;
   isOnlyBotsMode = config.onlyBots;
-  const { aiCount, boardRadius, winPoints, friendlyRobber, multiRobber, aiDifficulty, onlyBots } = config;
+  let { aiCount, boardRadius, winPoints, friendlyRobber, multiRobber, aiDifficulty, onlyBots, gameMode, expansionInterval, desertNewChance, desertDecayChance } = config;
+  
+  // Enforce minimum 14 VP for Expanding Board
+  if (gameMode === 'Expanding Board (Experimental)' && winPoints < 14) {
+      winPoints = 14;
+  }
+
   const myName = getProfileName();
   localStorage.setItem('hexbound_playername', myName);
   
@@ -3220,7 +3728,7 @@ function resetGame(config) {
   // Final sanitization of IDs to match indices
   players.forEach((p, idx) => p.id = idx);
 
-  gs = new GameState(board, players, winPoints, friendlyRobber, aiDifficulty, multiRobber);
+  gs = new GameState(board, players, winPoints, friendlyRobber, aiDifficulty, multiRobber, gameMode, expansionInterval, desertNewChance, desertDecayChance);
   gs.started = true;
   ren = new CanvasRenderer(canvas, board);
   inp = new InputHandler(canvas, board, gs, ren);
@@ -3234,6 +3742,74 @@ function resetGame(config) {
   if (players[0].isBot) {
     setTimeout(() => gs.aiInitial(), 1000);
   }
+}
+
+function drawDesertGraph(history) {
+    const canvas = document.getElementById('desertGraph');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    
+    // Smooth the line points for a better look
+    const maxVal = Math.max(...history, 50); 
+    const minVal = 0; 
+    const range = maxVal || 1;
+
+    ctx.clearRect(0, 0, w, h);
+    
+    // Grid lines (25%, 50%, 75%)
+    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+    ctx.lineWidth = 1;
+    [0.25, 0.5, 0.75].forEach(p => {
+        const y = h - h * p;
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+    });
+
+    if (history.length < 1) return;
+
+    // Draw the main line
+    ctx.strokeStyle = '#f4a460';
+    ctx.lineWidth = 4;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    
+    const getX = (i) => (i / Math.max(1, history.length - 1)) * (w - 30) + 15;
+    const getY = (val) => h - ((val / range) * (h - 40)) - 20;
+
+    history.forEach((val, i) => {
+        const x = getX(i);
+        const y = getY(val);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    // Fill underneath
+    ctx.lineTo(getX(history.length - 1), h);
+    ctx.lineTo(getX(0), h);
+    const grad = ctx.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, 'rgba(244, 164, 96, 0.3)');
+    grad.addColorStop(1, 'rgba(244, 164, 96, 0)');
+    ctx.fillStyle = grad;
+    ctx.fill();
+    
+    // Points & Labels
+    history.forEach((val, i) => {
+        const x = getX(i);
+        const y = getY(val);
+        
+        ctx.fillStyle = '#f4a460';
+        ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.stroke();
+        
+        // Show labels for first, last, and substantial changes
+        if (i === 0 || i === history.length - 1 || Math.abs(history[i] - history[i-1]) > 5) {
+            ctx.fillStyle = '#fff';
+            ctx.font = '10px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText(`${val}%`, x, y - 10);
+        }
+    });
 }
 
 // --- BUTTON CLICK HANDLERS ---
@@ -3271,9 +3847,14 @@ document.querySelectorAll('.back-btn').forEach(btn => {
 const startSoloBtn = document.getElementById('startSoloBtn');
 if (startSoloBtn) {
     startSoloBtn.onclick = () => {
+        const gm = document.getElementById('gameModeSolo').value;
         const config = {
             aiCount: parseInt(document.getElementById('aiCount').value),
-            boardRadius: parseInt(document.getElementById('boardSizeSolo').value),
+            gameMode: gm,
+            expansionInterval: document.getElementById('expansionIntervalSolo').value,
+            desertNewChance: parseInt(document.getElementById('desertNewSolo').value) / 100,
+            desertDecayChance: parseInt(document.getElementById('desertDecaySolo').value) / 100,
+            boardRadius: (gm === 'Expanding Board (Experimental)') ? 2 : parseInt(document.getElementById('boardSizeSolo').value),
             winPoints: parseInt(document.getElementById('winPointsSolo').value),
             friendlyRobber: document.getElementById('friendlyRobberSolo').checked,
             multiRobber: document.getElementById('multiRobberSolo').checked,
@@ -3306,8 +3887,13 @@ if (createMatchBtn) {
     }
 
     try {
+        const gm = document.getElementById('gameModeHost').value;
         const initialConfig = {
-            boardRadius: parseInt(document.getElementById('boardSizeHost').value),
+            gameMode: gm,
+            expansionInterval: document.getElementById('expansionIntervalHost').value,
+            desertNewChance: parseInt(document.getElementById('desertNewHost').value) / 100,
+            desertDecayChance: parseInt(document.getElementById('desertDecayHost').value) / 100,
+            boardRadius: (gm === 'Expanding Board (Experimental)') ? 2 : parseInt(document.getElementById('boardSizeHost').value),
             winPoints: parseInt(document.getElementById('winPointsHost').value),
             friendlyRobber: document.getElementById('friendlyRobberHost').checked,
             multiRobber: document.getElementById('multiRobberHost').checked
@@ -3403,9 +3989,14 @@ document.getElementById('joinConfirmBtn').onclick = async () => {
 };
 
 startGameBtn.onclick = async () => {
+  const gm = document.getElementById('gameModeHost').value;
   const config = {
     aiCount: 0,
-    boardRadius: parseInt(document.getElementById('boardSizeHost').value),
+    gameMode: gm,
+    expansionInterval: document.getElementById('expansionIntervalHost').value,
+    desertNewChance: parseInt(document.getElementById('desertNewHost').value) / 100,
+    desertDecayChance: parseInt(document.getElementById('desertDecayHost').value) / 100,
+    boardRadius: (gm === 'Expanding Board (Experimental)') ? 2 : parseInt(document.getElementById('boardSizeHost').value),
     winPoints: parseInt(document.getElementById('winPointsHost').value),
     friendlyRobber: document.getElementById('friendlyRobberHost').checked,
     multiRobber: document.getElementById('multiRobberHost').checked,
@@ -3549,8 +4140,32 @@ function loop() {
   discardPanel.style.display = (humanInDiscard && !isWinning) ? 'flex' : 'none';
   
   if (isWinning) {
-      victoryPanel.style.display = 'flex';
-      document.getElementById('victory-name').innerText = `${gs.winner.name.toUpperCase()} WINS!`;
+      if (victoryPanel.style.display !== 'flex') {
+          victoryPanel.style.display = 'flex';
+          const victNameEl = document.getElementById('victory-name');
+          const turnCountEl = document.getElementById('victory-turns');
+          
+          if (gs.winner.isEnvironment) {
+              victNameEl.innerText = "THE DESERT WINS!";
+              victNameEl.style.color = "#f4a460";
+              victNameEl.style.textShadow = "0 0 20px rgba(244, 164, 96, 0.5)";
+          } else {
+              victNameEl.innerText = `${gs.winner.name.toUpperCase()} WINS!`;
+              victNameEl.style.color = "gold";
+              victNameEl.style.textShadow = "0 0 20px rgba(255, 215, 0, 0.5)";
+          }
+
+          turnCountEl.innerText = `The game lasted ${gs.rotations} turns.`;
+          turnCountEl.style.display = 'block';
+          
+          const graphContainer = document.getElementById('desert-graph-container');
+          if (gs.gameMode === 'Expanding Board (Experimental)' && gs.desertHistory && gs.desertHistory.length > 1) {
+              graphContainer.style.display = 'flex';
+              drawDesertGraph(gs.desertHistory);
+          } else {
+              graphContainer.style.display = 'none';
+          }
+      }
   } else {
       victoryPanel.style.display = 'none';
   }

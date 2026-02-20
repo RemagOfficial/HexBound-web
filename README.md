@@ -6,12 +6,15 @@ HexBound is a browser-based, high-performance strategy game and simulation engin
 
 1.  Open [index.html](index.html) in any modern web browser.
 2.  Choose your game mode from the **Main Menu**:
-    *   **Singleplayer**: Quick-start a local match against AIs.
-    *   **Multiplayer**: Host or join a real-time online match.
+    *   **Standard**: Classic hex-grid setup with a fixed board size.
+    *   **Expanding Board (Experimental)**: A survival-mode where the map grows radially over time until it reaches a massive scale, followed by environmental decay.
 3.  Configure your session in the **Setup Menu**:
     *   **AI Opponents**: Play with up to 37 AI players (38 players total).
     *   **Board Size**: Small (7 hexes), Standard (19 hexes), Large (37 hexes), Extra Large (61 hexes), Colossal (91 hexes), or **Hell (1141 hexes)**.
+    *   **Expansion Frequency**: (Expanding Mode only) Control how often the board grows (from 1 to 5 rotations).
+    *   **Hazard Sliders**: (Expanding Mode only) Customize the **New Hex Desert Chance** and **Tile Decay (Wither) Chance** (0-50%).
     *   **AI Difficulty**: Choose from **Beginner** (Slow/Random), **Skilled** (Balanced), or **Master** (Aggressive/Strategic).
+    *   **Win Points**: Set target scores from **3 to 25** (Standard) or **14 to 30** (Expanding Board) to suit your desired playtime.
     *   **Multi-Robber Mode**: Enable this to start every desert with a robber. Requires a two-phase selection (Pick Robber -> Pick Destination).
     *   **Only Bots Mode (Auto-Battle)**: Toggle this to watch a fully automated simulation.
     *   **Friendly Robber (Safe at 2 pts)**: Protect new players from being robbed early.
@@ -23,7 +26,28 @@ HexBound is a browser-based, high-performance strategy game and simulation engin
 *   **🔍 Zoom**: Use the **Mouse Wheel** (Desktop) or **Pinch-to-Zoom** (Mobile) to scale the board. Supports extreme wide-angle viewing (**0.05x**) for massive maps.
 *   **🛠️ Build**: Click **Vertices** to build Settlements/Cities and **Edges** to build Roads. Valid locations pulse with cyan/gold highlights after your roll.
 *   **🎲 Actions**: Use the control bar to **Roll Dice**, **End Turn**, or perform **Trades**.
-*   **✨ Dice Visuals**: Experience a high-polish dice system with a centralized animation that follows a **Roll, Grow, Pause, and Fade** sequence for maximum clarity.
+*   **✨ Toggleable Dice Visuals**: Experience a high-polish dice system with a centralized animation. Late-game performance can be optimized via the **"Dice Anim"** checkbox in the game controls, allowing for instant rolls on massive boards.
+
+## 🏝 Expanding Board (Experimental Mode)
+
+This mode transforms the game into a survival-horror strategy where the very ground beneath your feet can perish.
+
+### 1. Radial Growth
+The board begins at a tiny radius of **2** and expands outward every few rotations. The new hexes are generated with weighted resource distributions and randomized number tokens based on their distance from the center.
+
+### 2. World Death & Desertification
+*   **Expansion Cap**: Growth stops permanently at **Radius 25**.
+*   **Clumped Hazards**: New hexes have a chance to be **Deserts** from the start, controlled by user sliders.
+*   **The Wither**: Existing tiles have a chance to "wither" into Deserts, especially once the board stops growing. The rate of decay accelerates over time, increasing its probability and frequency.
+*   **Live Analytics**: The UI displays real-time **Radius** and **Desert Percentage** metrics.
+
+### 3. Player Elimination
+*   **Soft-Lock Detection**: Players are automatically eliminated if they lose all viable resource sources (bordered by deserts), have no building materials, and no way to trade for help.
+*   **Total Defeat**: If the environment wins (everyone is eliminated before reaching the VP goal), the game concludes with a special **"THE DESERT WINS!"** victory screen in a sandy orange theme.
+*   **The Survival Challenge**: If you are the last player remaining, you must still reach the target score to win. If the desert consumes your last resources before you hit the limit, you will also be eliminated, resulting in a **Total Defeat**.
+
+### 4. End-Game Visualization
+For both singleplayer and multiplayer matches, a **Desertification Trend Graph** is displayed on the victory screen, tracking the world's decline from the first rotation to the final turn. Guests in synchronized matches will see the same trend data as the host.
 
 ## 🌐 Multiplayer (Online Sync)
 
@@ -32,6 +56,7 @@ HexBound supports **Real-Time Multiplayer** across different browsers using Goog
 ### 1. Connecting
 *   **Host a Match**: Select **Multiplayer** -> **Host Game**. Enter your character name, a unique **Match ID** (e.g., `cool-room-123`), and configure the board settings. Once in the **Lobby**, wait for players to join and then click **Start Game**.
 *   **Join a Match**: Select **Multiplayer** -> **Join Game**. Enter your character name and the exact match code from the host. You'll be connected to the lobby instantly.
+*   **Multiplayer Expansion**: In **Expanding Board** mode, the board grows and rotations are tracked globally. Even if the first player (Host) is eliminated, the board will continue to grow correctly as the turn cycle wraps around.
 *   **Persistent Names**: Your preferred username is saved and synchronized across all menus automatically.
 *   **Abandon Game**: If the Host abandons, the match is deleted from the server and all guests are returned to the menu. 
 
@@ -46,6 +71,7 @@ HexBound supports **Real-Time Multiplayer** across different browsers using Goog
 ## 🏆 Game Mechanics
 
 ### 1. Building & Scoring
+*   **Turn Tracking**: Every game features a **"Turns"** counter in the top-right HUD. A turn represents one full **Rotation** through all active players.
 *   **Settlement (1 VP)**: Costs 1 Wood, 1 Brick, 1 Sheep, 1 Wheat.
 *   **City (2 VP)**: Costs 3 Ore, 2 Wheat (Upgrades an existing Settlement).
 *   **Roads**: Costs 1 Wood, 1 Brick. Used to expand your reach.
