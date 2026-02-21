@@ -3486,7 +3486,7 @@ function updateModeVisibility() {
         brSoloOptions.style.display = isBR ? 'block' : 'none';
         
         if (isBR) {
-            document.getElementById('boardSizeSolo').value = "20";
+            // Battle Royale radius is fixed at 20 (Apocalypse)
             document.getElementById('aiCount').value = "39";
         }
         
@@ -3509,7 +3509,7 @@ function updateModeVisibility() {
         brHostOptions.style.display = isBR ? 'block' : 'none';
 
         if (isBR) {
-            document.getElementById('boardSizeHost').value = "20";
+            // Battle Royale radius is fixed at 20 (Apocalypse)
         }
 
         const wpInput = document.getElementById('winPointsHost');
@@ -4530,7 +4530,7 @@ if (startSoloBtn) {
             brShrinkInterval: parseInt(document.getElementById('brShrinkIntervalSolo').value),
             brGraceRotations: parseInt(document.getElementById('brGraceSolo').value),
             brDiscardLimit: parseInt(document.getElementById('brDiscardSolo').value),
-            boardRadius: (gm === 'Expanding Board (Experimental)') ? 2 : parseInt(document.getElementById('boardSizeSolo').value),
+            boardRadius: (gm === 'Battle Royale') ? 20 : (gm === 'Expanding Board (Experimental)' ? 2 : parseInt(document.getElementById('boardSizeSolo').value)),
             winPoints: parseInt(document.getElementById('winPointsSolo').value),
             friendlyRobber: document.getElementById('friendlyRobberSolo').checked,
             multiRobber: document.getElementById('multiRobberSolo').checked,
@@ -4572,7 +4572,7 @@ if (createMatchBtn) {
             brShrinkInterval: parseInt(document.getElementById('brShrinkIntervalHost').value),
             brGraceRotations: parseInt(document.getElementById('brGraceHost').value),
             brDiscardLimit: parseInt(document.getElementById('brDiscardHost').value),
-            boardRadius: (gm === 'Expanding Board (Experimental)') ? 2 : parseInt(document.getElementById('boardSizeHost').value),
+            boardRadius: (gm === 'Battle Royale') ? 20 : (gm === 'Expanding Board (Experimental)' ? 2 : parseInt(document.getElementById('boardSizeHost').value)),
             winPoints: parseInt(document.getElementById('winPointsHost').value),
             friendlyRobber: document.getElementById('friendlyRobberHost').checked,
             multiRobber: document.getElementById('multiRobberHost').checked,
