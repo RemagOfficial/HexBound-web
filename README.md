@@ -7,15 +7,16 @@ Hexbound is a browser-based, high-performance strategy game and simulation engin
 1.  Open [index.html](index.html) in any modern web browser.
 2.  Choose your game mode from the **Main Menu**:
     *   **Standard**: Classic hex-grid setup with a fixed board size.
+    *   **Battle Royale**: A high-stakes survival mode where the board shrinks toward the center until only a final "safe zone" remains.
     *   **Expanding Board (Experimental)**: A survival-mode where the map grows radially over time until it reaches a massive scale, followed by environmental decay.
 3.  Configure your session in the **Setup Menu**:
     *   **AI Opponents**: Play with up to 37 AI players (38 players total).
     *   **Board Size**: Small (7 hexes), Standard (19 hexes), Large (37 hexes), Extra Large (61 hexes), Colossal (91 hexes), or **Hell (1141 hexes)**.
-    *   **Expansion Frequency**: (Expanding Mode only) Control how often the board grows (from 1 to 5 rotations).
-    *   **Hazard Sliders**: (Expanding Mode only) Customize the **New Hex Desert Chance** and **Tile Decay (Wither) Chance** (0-50%).
+    *   **Mode-Specific Settings**: Different game modes (Battle Royale, Expanding Board) have additional sub-settings like shrink/expansion rates and hazard chances (see detailed sections below).
     *   **AI Difficulty**: Choose from **Beginner** (Slow/Random), **Skilled** (Balanced), or **Master** (Aggressive/Strategic).
     *   **Win Points**: Set target scores from **3 to 25** (Standard) or **14 to 30** (Expanding Board) to suit your desired playtime.
     *   **Multi-Robber Mode**: Enable this to start every desert with a robber. Requires a two-phase selection (Pick Robber -> Pick Destination).
+    *   **Private Match**: (Multiplayer) Hide your match from the public game browser.
     *   **Only Bots Mode (Auto-Battle)**: Toggle this to watch a fully automated simulation.
     *   **Friendly Robber (Safe at 2 pts)**: Protect new players from being robbed early.
 4.  Click **Start Game** to begin the match.
@@ -25,8 +26,27 @@ Hexbound is a browser-based, high-performance strategy game and simulation engin
 *   **🖱️ Pan**: Click and drag (Desktop) or **One-Finger Drag** (Mobile) to move the board.
 *   **🔍 Zoom**: Use the **Mouse Wheel** (Desktop) or **Pinch-to-Zoom** (Mobile) to scale the board. Supports extreme wide-angle viewing (**0.05x**) for massive maps.
 *   **🛠️ Build**: Click **Vertices** to build Settlements/Cities and **Edges** to build Roads. Valid locations pulse with cyan/gold highlights after your roll.
-*   **🎲 Actions**: Use the control bar to **Roll Dice**, **End Turn**, or perform **Trades**.
-*   **✨ Toggleable Dice Visuals**: Experience a high-polish dice system with a centralized animation. Late-game performance can be optimized via the **"Dice Anim"** checkbox in the game controls, allowing for instant rolls on massive boards.
+*   **🎲 Actions**: Use the control bar to **Roll Dice**, **End Turn**, or perform **Trades**. Note: If you have "Free Roads" pending from a Development Card, you must use them all before ending your turn.
+*   **✨ UI Feedback**: A pulsing **"YOUR TURN"** indicator appears when you are active. Be warned: refreshing or leaving mid-game counts as a loss and will be recorded in your statistics.
+
+## 🔥 Battle Royale Mode
+
+In this mode, the board is your greatest enemy. Players must race toward the center while the outer rings are systematically destroyed.
+
+### 1. The Shrink
+After a short grace period, the board's radius decreases every few rotations. Any hex outside the new radius is permanently removed along with all structures built upon it.
+
+### 2. Survival Rules
+*   **Safe Zone**: The board stops shrinking at a radius of **2** (the center 19 hexes). This perimeter is clearly marked by a gold dashed boundary.
+*   **Initial Placement**: Players are forced to start in the **outer 4 rings**, making the migration toward the center a core part of the strategy.
+*   **Higher Stakes Discarding**: To accommodate longer travel times, the discard limit is raised (default **16 cards**) instead of the standard 7.
+*   **Elimination**: If a player loses all their structures to the encroaching void, they are immediately eliminated from the game.
+*   **Bot Strategy**: AI opponents in this mode will "sprint" toward the safe zone and enter a holding pattern once secure, saving resources to rebuild if they are forced back to the edge.
+
+### 3. Setup & Settings
+*   **Shrink Frequency**: Control how often the board's radius decreases (typically 3 rotations).
+*   **Grace Period**: Set initial turns where the board remains stable before shrinking begins.
+*   **Discard Limit**: The default discard limit is raised (default **16 cards**) to help players hoard resources while migrating.
 
 ## 🏝 Expanding Board (Experimental Mode)
 
@@ -48,6 +68,10 @@ The board begins at a tiny radius of **2** and expands outward every few rotatio
 
 ### 4. End-Game Visualization
 For both singleplayer and multiplayer matches, a **Desertification Trend Graph** is displayed on the victory screen, tracking the world's decline from the first rotation to the final turn. Guests in synchronized matches will see the same trend data as the host.
+
+### 5. Setup & Settings
+*   **Expansion Frequency**: How often the board grows radially (default 2 rotations).
+*   **Hazard Sliders**: Customize the **New Hex Desert Chance** (probability a new hex is a desert) and **Tile Decay (Wither) Chance** (probability an existing hex turns into a desert).
 
 ## 📊 Vault of Records (Stats Tracking)
 
@@ -116,7 +140,7 @@ HexBound supports **Real-Time Multiplayer** across different browsers using Goog
 
 ### 4. The Robber & Manual Discarding
 *   **Rolling a 7**: Pauses the game for a special phase:
-    *   **Manual Discard**: Any player (human or AI) with more than 7 cards must select exactly half of their hand to lose.
+    *   **Manual Discard**: Any player (human or AI) with more than 7 cards (or 16 in Battle Royale) must select exactly half of their hand to lose.
     *   **Move Robber**: The current player moves the grey Robber to block a hex from producing resources.
     *   **Steal**: The current player chooses an opponent on that hex to steal 1 random resource from.
 *   **Friendly Robber**: When enabled, the Robber cannot target players with 2 VP or fewer.

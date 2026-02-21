@@ -233,6 +233,42 @@
             display: none; /* Hidden until game starts */
         }
 
+        #turn-indicator {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 10px 30px;
+            background: rgba(44, 62, 80, 0.9);
+            border: 2px solid #7f8c8d;
+            border-radius: 50px;
+            font-size: 24px;
+            font-weight: bold;
+            color: white;
+            z-index: 1500;
+            text-align: center;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+            letter-spacing: 1px;
+            pointer-events: none;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            transition: all 0.3s ease;
+        }
+
+        #turn-indicator.your-turn {
+            border-color: #f1c40f;
+            background: rgba(44, 62, 80, 0.95);
+            box-shadow: 0 0 20px rgba(241, 196, 15, 0.6);
+            animation: pulse-border 2s infinite;
+        }
+
+        @keyframes pulse-border {
+            0% { box-shadow: 0 0 10px rgba(241, 196, 15, 0.4); transform: translateX(-50%) scale(1); }
+            50% { box-shadow: 0 0 25px rgba(241, 196, 15, 0.8); transform: translateX(-50%) scale(1.05); }
+            100% { box-shadow: 0 0 10px rgba(241, 196, 15, 0.4); transform: translateX(-50%) scale(1); }
+        }
+
         /* Toast Notification System */
         #toast-container {
             position: fixed;
@@ -429,6 +465,7 @@
                     <option value="25">25 AIs</option>
                     <option value="30">30 AIs</option>
                     <option value="37">37 AIs</option>
+                    <option value="39">39 AIs (40 Players Total)</option>
                 </select>
             </div>
 
@@ -437,7 +474,30 @@
                 <select id="gameModeSolo">
                     <option value="Standard" selected>Standard</option>
                     <option value="Expanding Board (Experimental)">Expanding Board (Experimental)</option>
+                    <option value="Battle Royale">Battle Royale</option>
                 </select>
+            </div>
+
+            <div id="brOptionsSolo" style="display: none;">
+                <div class="option-group">
+                    <label>Shrink Frequency</label>
+                    <select id="brShrinkIntervalSolo">
+                        <option value="1">Fast (1 Rotation)</option>
+                        <option value="2">Quick (2 Rotations)</option>
+                        <option value="3" selected>Standard (3 Rotations)</option>
+                        <option value="5">Slow (5 Rotations)</option>
+                        <option value="8">Very Slow (8 Rotations)</option>
+                        <option value="10">Glacial (10 Rotations)</option>
+                    </select>
+                </div>
+                <div class="option-group">
+                    <label>Initial Grace: <span id="brGraceValueSolo">5</span> Rotations</label>
+                    <input type="range" id="brGraceSolo" min="0" max="15" value="5">
+                </div>
+                <div class="option-group">
+                    <label>Discard Limit: <span id="brDiscardValueSolo">16</span> Resources</label>
+                    <input type="range" id="brDiscardSolo" min="7" max="100" value="16">
+                </div>
             </div>
 
             <div class="option-group" id="boardSizeSoloGroup">
@@ -449,6 +509,7 @@
                     <option value="4">Extra Large (61 Hexes)</option>
                     <option value="5">Colossal (91 Hexes)</option>
                     <option value="19">Hell (1141 Hexes)</option>
+                    <option value="20">Apocalypse (Radius 20)</option>
                 </select>
             </div>
 
@@ -535,7 +596,30 @@
                 <select id="gameModeHost">
                     <option value="Standard" selected>Standard</option>
                     <option value="Expanding Board (Experimental)">Expanding Board (Experimental)</option>
+                    <option value="Battle Royale">Battle Royale</option>
                 </select>
+            </div>
+
+            <div id="brOptionsHost" style="display: none;">
+                <div class="option-group">
+                    <label>Shrink Frequency</label>
+                    <select id="brShrinkIntervalHost">
+                        <option value="1">Fast (1 Rotation)</option>
+                        <option value="2">Quick (2 Rotations)</option>
+                        <option value="3" selected>Standard (3 Rotations)</option>
+                        <option value="5">Slow (5 Rotations)</option>
+                        <option value="8">Very Slow (8 Rotations)</option>
+                        <option value="10">Glacial (10 Rotations)</option>
+                    </select>
+                </div>
+                <div class="option-group">
+                    <label>Initial Grace: <span id="brGraceValueHost">5</span> Rotations</label>
+                    <input type="range" id="brGraceHost" min="0" max="15" value="5">
+                </div>
+                <div class="option-group">
+                    <label>Discard Limit: <span id="brDiscardValueHost">16</span> Resources</label>
+                    <input type="range" id="brDiscardHost" min="7" max="100" value="16">
+                </div>
             </div>
 
             <div class="option-group" id="boardSizeHostGroup">
@@ -547,6 +631,7 @@
                     <option value="4">Extra Large (61 Hexes)</option>
                     <option value="5">Colossal (91 Hexes)</option>
                     <option value="19">Hell (1141 Hexes)</option>
+                    <option value="20">Apocalypse (Radius 20)</option>
                 </select>
             </div>
 
@@ -582,6 +667,11 @@
             <div class="option-group" style="display: flex; align-items: center; gap: 10px;">
                 <input type="checkbox" id="multiRobberHost">
                 <label style="margin-bottom: 0;">Multi-Robbers (Every Desert starts with one)</label>
+            </div>
+
+            <div class="option-group" style="display: flex; align-items: center; gap: 10px;">
+                <input type="checkbox" id="privateMatchHost">
+                <label style="margin-bottom: 0;">Private Match (Hide from public list)</label>
             </div>
 
             <button id="createMatchBtn" style="width: 100%;">Create Lobby</button>
@@ -649,6 +739,10 @@
     <div id="toast-container"></div>
 
     <div id="game-interface">
+        <div id="turn-indicator">
+            <div id="turn-color-dot" style="width: 20px; height: 20px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 10px rgba(0,0,0,0.5);"></div>
+            <span id="turn-text">WAITING FOR GAME...</span>
+        </div>
         
         <!-- Center-Screen Modals -->
         <div id="trade-panel" style="display:none; background: rgba(0,0,0,1.0); padding: 20px; border-radius: 12px; flex-direction: column; gap: 15px; width: 360px; border: 2px solid #f1c40f; box-shadow: 0 0 50px rgba(0,0,0,0.8);">
@@ -763,7 +857,7 @@
                         <li><strong>Initial Phase:</strong> Place 2 settlements and 2 roads. The second settlement grants starting resources.</li>
                         <li><strong>Turn Flow:</strong> Roll Dice &rarr; Collect Resources &rarr; Build/Trade &rarr; End Turn.</li>
                         <li><strong>Bank Scarcity:</strong> The bank has limited stock. If a resource is depleted, no one receives it from a roll until cards are returned!</li>
-                        <li><strong>The Robber (7):</strong> If you roll a 7, everyone with >7 cards must discard half. You then move the robber and steal 1 card from an adjacent player.</li>
+                        <li id="ruleRobber7"><strong>The Robber (7):</strong> If you roll a 7, everyone with >7 cards must discard half. You then move the robber and steal 1 card from an adjacent player.</li>
                         <li><strong>Building:</strong> Settlements must be 2 edges away from any other structure. Cities upgrade settlements.</li>
                         <li><strong>Costs:</strong>
                             <br>&bull; Road: 1 Wood, 1 Brick

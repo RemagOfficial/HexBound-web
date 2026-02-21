@@ -14,7 +14,7 @@ const HEX_TYPES = {
   WATER: { name: 'Water', color: '#2980b9' }
 };
 
-const PLAYER_COLORS = ['#0099ff', '#ff4444', '#ffcc00', '#ffffff', '#e67e22', '#9b59b6', '#2ecc71', '#e91e63', '#1abc9c', '#800000', '#ff00ff', '#00ffff', '#990000', '#006600', '#000099', '#666666', '#ff80ed', '#fa8072', '#00ff00', '#ff0000', '#0000ff', '#b0e0e6', '#da70d6', '#ffa500', '#4b0082', '#808000', '#008080', '#ffdab9', '#c0c0c0', '#40e0d0', '#800080', '#00bfff', '#7cfc00', '#ff1493', '#ffd700', '#8b4513', '#556b2f', '#00ced1'];
+const PLAYER_COLORS = ['#0099ff', '#ff4444', '#ffcc00', '#ffffff', '#e67e22', '#9b59b6', '#2ecc71', '#e91e63', '#1abc9c', '#800000', '#ff00ff', '#00ffff', '#990000', '#006600', '#000099', '#666666', '#ff80ed', '#fa8072', '#00ff00', '#ff0000', '#0000ff', '#b0e0e6', '#da70d6', '#ffa500', '#4b0082', '#808000', '#008080', '#ffdab9', '#c0c0c0', '#40e0d0', '#800080', '#00bfff', '#7cfc00', '#ff1493', '#ffd700', '#8b4513', '#556b2f', '#00ced1', '#483d8b', '#2f4f4f'];
 
 const COSTS = {
   ROAD: { WOOD: 1, BRICK: 1 },
@@ -38,6 +38,7 @@ const DEFAULT_STATS = {
     total: { ...DEFAULT_SECTION },
     standard: { ...DEFAULT_SECTION },
     expanding: { ...DEFAULT_SECTION },
+    battleRoyale: { ...DEFAULT_SECTION },
     singleplayer: { ...DEFAULT_SECTION },
     multiplayer: { ...DEFAULT_SECTION }
 };
@@ -58,6 +59,7 @@ function loadStats() {
             total: merge(defaults.total, stored.total),
             standard: merge(defaults.standard, stored.standard),
             expanding: merge(defaults.expanding, stored.expanding),
+            battleRoyale: merge(defaults.battleRoyale, stored.battleRoyale),
             singleplayer: merge(defaults.singleplayer, stored.singleplayer),
             multiplayer: merge(defaults.multiplayer, stored.multiplayer)
         };
@@ -83,7 +85,12 @@ function recordGameResult(gs) {
 
     const stats = loadStats();
     const isExpanding = (gs.gameMode === 'Expanding Board (Experimental)');
-    const modeKey = isExpanding ? 'expanding' : 'standard';
+    const isBR = (gs.gameMode === 'Battle Royale');
+    
+    let modeKey = 'standard';
+    if (isExpanding) modeKey = 'expanding';
+    else if (isBR) modeKey = 'battleRoyale';
+
     const connectionKey = gameSync.isMultiplayer ? 'multiplayer' : 'singleplayer';
 
     [stats.total, stats[modeKey], stats[connectionKey]].forEach(s => {
@@ -113,7 +120,8 @@ function updateStatsUI() {
         { label: 'SINGLEPLAYER', data: stats.singleplayer, color: '#2ecc71' },
         { label: 'MULTIPLAYER', data: stats.multiplayer, color: '#3498db' },
         { label: 'STANDARD MODE', data: stats.standard, color: '#95a5a6' },
-        { label: 'EXPANDING BOARD', data: stats.expanding, color: '#f4a460' }
+        { label: 'EXPANDING BOARD', data: stats.expanding, color: '#f4a460' },
+        { label: 'BATTLE ROYALE', data: stats.battleRoyale, color: '#e74c3c' }
     ];
 
     container.innerHTML = sections.map(sec => {
@@ -228,6 +236,27 @@ class Board {
     const board = new Board(data.radius);
     board.fromJSON(data);
     return board;
+  }
+
+  isVertexInOuterRings(vKey, numRings) {
+    const v = this.vertices.get(vKey);
+    if (!v) return false;
+    // A hex with max(abs(q), abs(r), abs(-q-r)) is in ring R.
+    return v.hexes.some(h => {
+        const ring = Math.max(Math.abs(h.q), Math.abs(h.r), Math.abs(-h.q - h.r));
+        return ring >= (this.radius - numRings + 1);
+    });
+  }
+
+  getVertexRing(vKey) {
+    const v = this.vertices.get(vKey);
+    if (!v) return 99;
+    let minRing = 99;
+    v.hexes.forEach(h => {
+        const ring = Math.max(Math.abs(h.q), Math.abs(h.r), Math.abs(-h.q - h.r));
+        if (ring < minRing) minRing = ring;
+    });
+    return minRing;
   }
 
   generateBoard(compactHexes = null) {
@@ -481,10 +510,15 @@ class Player {
 
 // --- LOGIC: RULES ---
 class Rules {
-  static canPlaceSettlement(board, vKey, player, phase) {
+  static canPlaceSettlement(board, vKey, player, phase, gameMode = 'Standard') {
     const v = board.getVertex(vKey);
     if (!v || v.ownerId !== null) return false;
     
+    // Battle Royale: Initial placements restricted to outer 4 rings
+    if (gameMode === 'Battle Royale' && phase === 'INITIAL') {
+        if (!board.isVertexInOuterRings(vKey, 4)) return false;
+    }
+
     const adjE = board.getEdgesOfVertex(vKey);
     if (adjE.some(e => {
         const otherV = (e.v1 === vKey) ? e.v2 : e.v1;
@@ -492,9 +526,15 @@ class Rules {
     })) return false;
     return phase === 'INITIAL' ? true : adjE.some(e => e.ownerId === player.id);
   }
-  static canPlaceRoad(board, eKey, player) {
+  static canPlaceRoad(board, eKey, player, phase, gameMode = 'Standard') {
     const e = board.getEdge(eKey);
     if (!e || e.ownerId !== null) return false;
+
+    // Battle Royale: Initial roads restricted to outer rings too
+    if (gameMode === 'Battle Royale' && phase === 'INITIAL') {
+        if (!board.isVertexInOuterRings(e.v1, 4) && !board.isVertexInOuterRings(e.v2, 4)) return false;
+    }
+
     if (board.getVertex(e.v1).ownerId === player.id || board.getVertex(e.v2).ownerId === player.id) return true;
     return board.getEdgesOfVertex(e.v1).some(oe => oe.ownerId === player.id) || board.getEdgesOfVertex(e.v2).some(oe => oe.ownerId === player.id);
   }
@@ -502,7 +542,7 @@ class Rules {
 
 // --- LOGIC: GAMESTATE ---
 class GameState {
-  constructor(board, players, targetScore = 10, friendlyRobber = false, aiDifficulty = 'Normal', multiRobber = false, gameMode = 'Standard', expansionInterval = '2', desertNewChance = 0.1, desertDecayChance = 0.2) {
+  constructor(board, players, targetScore = 10, friendlyRobber = false, aiDifficulty = 'Normal', multiRobber = false, gameMode = 'Standard', expansionInterval = '2', desertNewChance = 0.1, desertDecayChance = 0.2, brShrinkInterval = 3, brGraceRotations = 5, brDiscardLimit = 16) {
     this.board = board; this.players = players; this.currentPlayerIdx = 0;
     this.targetScore = targetScore; this.friendlyRobber = friendlyRobber;
     this.aiDifficulty = aiDifficulty;
@@ -511,6 +551,9 @@ class GameState {
     this.expansionInterval = expansionInterval;
     this.desertNewChance = desertNewChance;
     this.desertDecayChance = desertDecayChance;
+    this.brShrinkInterval = brShrinkInterval;
+    this.brGraceRotations = brGraceRotations;
+    this.brDiscardLimit = brDiscardLimit;
     this.nextExpansionRotations = 0; // Will be set after first rotation or game start
     this.maxRadiusCycles = 0; // Tracks cycles after hitting radius 25
     this.phase = 'INITIAL'; this.dice = [1, 1]; this.history = [];
@@ -534,12 +577,14 @@ class GameState {
     this.turnToken = 0;
     this.gameId = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
     this.rotations = 0;
+    this.totalTurns = 0;
     this.turnsInRotation = 0;
     this.waitingForDiscards = []; // Array of ids who must discard
     this.aiTradeAttempts = 0; // Track AI trade attempts per turn
     this.playedDevCardThisTurn = false;
     this.pendingRoads = 0;
     this.started = false;
+    this.effects = []; // Animation effects queue (e.g. pulse for destroyed buildings)
 
     // Track desert percentage history for victory graph
     this.desertHistory = [];
@@ -623,6 +668,9 @@ class GameState {
       expansionInterval: this.expansionInterval || '2',
       desertNewChance: this.desertNewChance || 0,
       desertDecayChance: this.desertDecayChance || 0,
+      brShrinkInterval: this.brShrinkInterval || 3,
+      brGraceRotations: this.brGraceRotations || 5,
+      brDiscardLimit: this.brDiscardLimit || 16,
       nextExpansionInterval: this.nextExpansionInterval || 0,
       maxRadiusCycles: this.maxRadiusCycles || 0,
       nextExpansionRotations: this.nextExpansionRotations || 0,
@@ -709,7 +757,7 @@ class GameState {
   static fromJSON(data) {
     const board = Board.fromJSON(data.board);
     const players = data.players.map(pData => Player.fromJSON(pData));
-    const gs = new GameState(board, players, data.targetScore, data.friendlyRobber, data.aiDifficulty, data.multiRobber, data.gameMode, data.expansionInterval || '2', data.desertNewChance || 0, data.desertDecayChance || 0);
+    const gs = new GameState(board, players, data.targetScore, data.friendlyRobber, data.aiDifficulty, data.multiRobber, data.gameMode, data.expansionInterval || '2', data.desertNewChance || 0, data.desertDecayChance || 0, data.brShrinkInterval || 3, data.brGraceRotations || 5, data.brDiscardLimit || 16);
     gs.fromJSON(data);
     return gs;
   }
@@ -885,6 +933,7 @@ class GameState {
   
   nextTurn() {
     this.turnToken++;
+    this.totalTurns++;
     
     // Find the next player who isn't eliminated
     const oldIdx = this.currentPlayerIdx;
@@ -907,6 +956,14 @@ class GameState {
             this.nextExpansionRotations = this.calculateNextExpansion();
         }
 
+        // Battle Royale Shrinking
+        if (this.gameMode === 'Battle Royale' && this.rotations > parseInt(this.brGraceRotations)) {
+            const rotationsInBR = this.rotations - parseInt(this.brGraceRotations);
+            if (rotationsInBR % parseInt(this.brShrinkInterval) === 0) {
+                this.shrinkBoard();
+            }
+        }
+
         // Record desert history trend per rotation for the victory graph
         if (this.gameMode === 'Expanding Board (Experimental)') {
           const hexes = Array.from(this.board.hexes.values());
@@ -925,8 +982,8 @@ class GameState {
 
     this.players.forEach(p => p.calculateVP(this.longestRoadHolderId, this.largestArmyHolderId));
     
-    // Elimination check for Expanding Board mode
-    if (this.gameMode === 'Expanding Board (Experimental)' && this.phase === 'PLAY') {
+    // Elimination check for Expanding Board or Battle Royale
+    if ((this.gameMode === 'Expanding Board (Experimental)' || this.gameMode === 'Battle Royale') && this.phase === 'PLAY') {
         this.checkEliminations();
     }
 
@@ -1160,6 +1217,125 @@ class GameState {
     if (gameSync.isMultiplayer && gameSync.isHost) gameSync.update(this, true);
   }
 
+  shrinkBoard() {
+    if (this.board.radius <= 2) return;
+    this.board.radius--;
+    this.log(`⚠️ THE CIRCLE IS SHRINKING! New radius: ${this.board.radius}`);
+
+    const newRadius = this.board.radius;
+    const removedHexKeys = [];
+    this.board.hexes.forEach((h, k) => {
+        const ring = Math.max(Math.abs(h.q), Math.abs(h.r), Math.abs(-h.q - h.r));
+        if (ring > newRadius) {
+            removedHexKeys.push(k);
+        }
+    });
+
+    const oldRobberCount = this.robberHexIds.length;
+
+    // 1. Remove hexes
+    removedHexKeys.forEach(k => {
+        const h = this.board.hexes.get(k);
+        // Clean up robber
+        this.robberHexIds = this.robberHexIds.filter(id => id !== k);
+        this.board.hexes.delete(k);
+    });
+
+    // Ensure all robbers that were on deleted tiles move back onto the board
+    const robbersToRelocate = oldRobberCount - this.robberHexIds.length;
+    if (robbersToRelocate > 0) {
+        this.log(`⚠️ ${robbersToRelocate} robber(s) were forced to relocate as the world shrank.`);
+        
+        // Find safe hexes: Deserts first, then any hex that doesn't currently have a robber
+        const remainingKeys = Array.from(this.board.hexes.keys());
+        const remainingDeserts = remainingKeys.filter(k => this.board.hexes.get(k).terrain === HEX_TYPES.DESERT);
+
+        for (let i = 0; i < robbersToRelocate; i++) {
+            // Find a spot that doesn't already have one of our remaining robbers
+            const spots = (remainingDeserts.length > 0 ? remainingDeserts : remainingKeys)
+                .filter(k => !this.robberHexIds.includes(k));
+            
+            if (spots.length > 0) {
+                const pick = spots[Math.floor(Math.random() * spots.length)];
+                this.robberHexIds.push(pick);
+            } else {
+                // If every single hex is already blocked by a robber (possible in end-game Multi-Robber),
+                // this specific robber is simply removed from the game.
+                this.log("⚠️ A robber has vanished into the shrinking void!");
+            }
+        }
+    }
+
+    if (newRadius <= 2) {
+        this.log(`🔥 THE BOARD HAS FULLY SHRUNK! Final circle reached!`);
+    }
+
+    // 2. Clear vertices and edges and rebuild based on remaining hexes
+    // A vertex survives if any of its hexes survive.
+    this.board.vertices.forEach((v, k) => {
+        v.hexes = v.hexes.filter(h => this.board.hexes.has(`${h.q},${h.r}`));
+        if (v.hexes.length === 0) {
+            // Vertex is gone. Check for building destruction.
+            this.players.forEach(p => {
+                if (p.settlements.includes(k) || p.cities.includes(k)) {
+                    // Add destruction pulse effect
+                    this.effects.push({
+                        type: 'pulse',
+                        x: v.x,
+                        y: v.y,
+                        color: p.color,
+                        life: 60,
+                        maxLife: 60
+                    });
+                }
+                p.settlements = p.settlements.filter(s => s !== k);
+                p.cities = p.cities.filter(c => c !== k);
+            });
+            this.board.vertices.delete(k);
+        }
+    });
+
+    this.board.edges.forEach((e, k) => {
+        if (!this.board.vertices.has(e.v1) || !this.board.vertices.has(e.v2)) {
+            // Edge coordinate is gone. Check for road destruction
+            this.players.forEach(p => {
+                if (p.roads.includes(k)) {
+                    // Pulse at center of edge
+                    const v1 = this.board.getVertex(e.v1);
+                    const v2 = this.board.getVertex(e.v2);
+                    if (v1 && v2) {
+                        this.effects.push({
+                            type: 'pulse',
+                            x: (v1.x + v2.x) / 2,
+                            y: (v1.y + v2.y) / 2,
+                            color: p.color,
+                            life: 40,
+                            maxLife: 40
+                        });
+                    }
+                }
+                p.roads = p.roads.filter(id => id !== k);
+            });
+            this.board.edges.delete(k);
+        } else {
+          // Check if it's still linked to any remaining hexes
+          const hs1 = Array.from(this.board.hexes.values()).filter(h => h.edges.includes(k));
+          if (hs1.length === 0) {
+            this.players.forEach(p => { p.roads = p.roads.filter(id => id !== k); });
+            this.board.edges.delete(k);
+          }
+        }
+    });
+
+    // Re-generate ports based on new coastline
+    this.board.generatePorts();
+    
+    // Final check for eliminations
+    this.checkEliminations();
+
+    if (gameSync.isMultiplayer && gameSync.isHost) gameSync.update(this, true);
+  }
+
   aiTurn() {
     if (gameSync.isMultiplayer && !gameSync.isHost) return;
     if (this.winner || !this.currentPlayer.isBot || this.hasRolled) return;
@@ -1231,7 +1407,7 @@ class GameState {
     const roadBuilding = p.devCards.find(c => c.type === 'ROAD_BUILDING' && c.boughtTurn < this.turnToken);
     if (roadBuilding) {
         // Play if we have a spot to build a settlement but need 2 roads to reach it
-        const allEdges = Array.from(this.board.edges.keys()).filter(e => Rules.canPlaceRoad(this.board, e, p));
+        const allEdges = Array.from(this.board.edges.keys()).filter(e => Rules.canPlaceRoad(this.board, e, p, this.phase, this.gameMode));
         if (allEdges.length > 0) {
             this.playDevCard(p, p.devCards.indexOf(roadBuilding));
             return;
@@ -1287,6 +1463,31 @@ class GameState {
         value += (dist / maxDist) * 7.5; 
     }
 
+    // Battle Royale: Strategy for survival
+    if (this.gameMode === 'Battle Royale' && this.aiDifficulty !== 'Beginner') {
+        const ring = this.board.getVertexRing(vKey);
+        
+        if (this.phase === 'INITIAL') {
+            // Setup phase: Hard restriction to outer 4 rings (+15 preference for inner ring)
+            if (ring < this.board.radius - 3) return -100;
+            value += (this.board.radius - ring) * 5; 
+        } else {
+            // Move inwards! The center is the only safe place.
+            // Massive bonus for moving towards the center (The Winner's Circle)
+            // Using a quadratic formula to create a strong pull that increases as they get closer.
+            value += Math.pow(this.board.radius - ring, 2) * 2.0; 
+
+            if (ring <= 2) {
+                value += 500; // Extra massive push to actually reach the center rings
+            }
+
+            // Hazard Warning: Severe penalty for building near the current world edge
+            if (ring >= this.board.radius - 2) {
+                value -= 100; // Increased penalty to prevent edge-huggers
+            }
+        }
+    }
+
     return value;
   }
 
@@ -1302,7 +1503,8 @@ class GameState {
     // Beginner skips turn phase early 20% of the time to be more "forgetful"
     // However, they won't skip if they are holding too many resources (fear of robber)
     const initialTotal = Object.values(p.resources).reduce((a, b) => a + b, 0);
-    if (diff === 'Beginner' && initialTotal <= 7 && Math.random() > 0.8) return;
+    const discardLimit = (this.gameMode === 'Battle Royale' ? this.brDiscardLimit : 7);
+    if (diff === 'Beginner' && initialTotal <= discardLimit && Math.random() > 0.8) return;
 
     while (madeAction && loops < 20) {
         madeAction = false;
@@ -1313,7 +1515,7 @@ class GameState {
 
         const resources = ['WOOD', 'BRICK', 'SHEEP', 'WHEAT', 'ORE'];
         const totalRes = Object.values(p.resources).reduce((a, b) => a + b, 0);
-        const overLimit = totalRes > 7;
+        const overLimit = totalRes > discardLimit;
 
         // Find what we need most for next build
         const needs = [];
@@ -1327,7 +1529,7 @@ class GameState {
             if (p.resources.WHEAT < 2) needs.push('WHEAT');
         }
 
-        // If over 7 resources, Skilled/Master bots will also focus on anything they are missing to burn resources
+        // If over the resource limit, Skilled/Master bots will also focus on anything they are missing to burn resources
         if (overLimit && diff !== 'Beginner') {
             // Also need Road components if we have high surplus to burn
             if (p.resources.WOOD < 1) needs.push('WOOD');
@@ -1337,7 +1539,7 @@ class GameState {
                 if (p.resources[r] === 0 && !needs.includes(r)) needs.push(r);
             });
             // If still no needs or just over limit, pick anything that isn't the surplus we might trade
-            if (needs.length === 0 || totalRes > 9) {
+            if (needs.length === 0 || totalRes > (discardLimit + 2)) {
                 // Finally, just pick the resources we have the absolute least of
                 const sorted = [...resources].sort((a,b) => p.resources[a] - p.resources[b]);
                 sorted.forEach(r => { if (!needs.includes(r)) needs.push(r); });
@@ -1403,12 +1605,24 @@ class GameState {
 
         // 3. BUILD CITY - Priority for VP and resource boost
         const inExpMode = (this.gameMode === 'Expanding Board (Experimental)');
-        const canSettleNow = p.canAfford(COSTS.SETTLEMENT) && Array.from(this.board.vertices.keys()).some(v => Rules.canPlaceSettlement(this.board, v, p, 'PLAY'));
+        const inBRMode = (this.gameMode === 'Battle Royale');
+        const canSettleNow = p.canAfford(COSTS.SETTLEMENT) && Array.from(this.board.vertices.keys()).some(v => Rules.canPlaceSettlement(this.board, v, p, this.phase, this.gameMode));
         
-        if (p.canAfford(COSTS.CITY) && p.settlements.length > 0) {
-            // In Expanding mode, bots much more strongly prioritize a Settlement over a City to claim space
-            const settleWeight = inExpMode ? 0.85 : 0.4;
-            if (inExpMode && canSettleNow && Math.random() < settleWeight) {
+        // Battle Royale Holding Pattern: if we are safe, we stay put to save resources for disasters
+        const structures = [...p.settlements, ...p.cities];
+        const myBestRing = structures.length > 0 ? Math.min(...structures.map(id => this.board.getVertexRing(id))) : 99;
+        const isOnEdge = structures.some(id => this.board.getVertexRing(id) >= this.board.radius - 1);
+        const alreadySafe = inBRMode && myBestRing <= 2;
+        const overHoldLimit = totalRes > (discardLimit + 4);
+        const shouldSkipBuilding = alreadySafe && !isOnEdge && !overHoldLimit;
+
+        if (shouldSkipBuilding) {
+           // Skip expansion, go straight to dev cards or trade to stay safe/burn extra
+        } else {
+          if (p.canAfford(COSTS.CITY) && p.settlements.length > 0) {
+            // In Expanding/BR mode, bots prioritize Settlements over Cities to claim space or reach the center
+            const settleWeight = (inExpMode || inBRMode) ? 0.8 : 0.4;
+            if ((inExpMode || inBRMode) && canSettleNow && Math.random() < settleWeight) {
                 // Skip city this loop to let the settlement logic below catch it
             } else {
                 // Master picks the settlement on highest value tiles
@@ -1428,12 +1642,44 @@ class GameState {
                 madeAction = true;
                 continue;
             }
-        }
+          }
 
-        // 3. BUILD SETTLEMENT
-        if (p.canAfford(COSTS.SETTLEMENT)) {
-            const allVertices = Array.from(this.board.vertices.keys()).filter(v => Rules.canPlaceSettlement(this.board, v, p, 'PLAY'));
-            if (allVertices.length > 0) {
+          // 3. BUILD SETTLEMENT
+          if (p.canAfford(COSTS.SETTLEMENT)) {
+            const allVertices = Array.from(this.board.vertices.keys()).filter(v => Rules.canPlaceSettlement(this.board, v, p, this.phase, this.gameMode));
+            
+            // In Battle Royale, don't just build a settlement because it's available.
+            // If it's too far from the center, we might prefer to save wood/brick for more roads.
+            let shouldBuildSettle = allVertices.length > 0;
+            if (allVertices.length > 0 && inBRMode && diff !== 'Beginner') {
+                const structures = [...p.settlements, ...p.cities];
+                const myBestRing = structures.length > 0 ? 
+                    Math.min(...structures.map(id => this.board.getVertexRing(id))) : 99;
+                const bestSettleRing = Math.min(...allVertices.map(v => this.board.getVertexRing(v)));
+                
+                // URGENT: If our structures are on the edge, or we only have ONE structure left, 
+                // we MUST settle inward immediately to avoid elimination.
+                const isOnlyStructure = structures.length <= 1;
+                const isOnEdge = structures.some(id => this.board.getVertexRing(id) >= this.board.radius - 1);
+                const urgentMigration = (isOnlyStructure || isOnEdge) && bestSettleRing < myBestRing;
+
+                // Only settle if it's much closer to the center than our current best, or if it's in the safe zone (Ring <= 2)
+                // or if we have a surplus of resources (overLimit)
+                const isSignificantImprovement = bestSettleRing < myBestRing - 4;
+                const isSafeZone = bestSettleRing <= 2;
+                const alreadySafe = myBestRing <= 2;
+                const highResources = overLimit || totalRes > (discardLimit + 4);
+                
+                // If we are already safe (in center 2 rings) and NOT on the edge,
+                // we should stop expanding to save resources, UNLESS we have too many.
+                if (alreadySafe && !isOnEdge && !highResources) {
+                    shouldBuildSettle = false;
+                } else if (!urgentMigration && !isSignificantImprovement && !isSafeZone && !highResources) {
+                    shouldBuildSettle = false;
+                }
+            }
+
+            if (shouldBuildSettle) {
                 let bestV;
                 if (diff === 'Master') {
                     bestV = allVertices.reduce((max, curr) => this.getVertexValue(curr) > this.getVertexValue(max) ? curr : max);
@@ -1445,14 +1691,14 @@ class GameState {
                 madeAction = true;
                 continue;
             }
-        }
+          }
 
-        // 4. BUILD ROAD - Logic refined to stop road-spamming when saving for a settlement
-        if (p.canAfford(COSTS.ROAD)) {
-            const allEdges = Array.from(this.board.edges.keys()).filter(e => Rules.canPlaceRoad(this.board, e, p));
+          // 4. BUILD ROAD - Logic refined to stop road-spamming when saving for a settlement
+          if (p.canAfford(COSTS.ROAD)) {
+            const allEdges = Array.from(this.board.edges.keys()).filter(e => Rules.canPlaceRoad(this.board, e, p, this.phase, this.gameMode));
             if (allEdges.length > 0) {
                 // Check if we currently have a valid spot to build a settlement
-                const hasSettlementSpot = Array.from(this.board.vertices.keys()).some(v => Rules.canPlaceSettlement(this.board, v, p, 'PLAY'));
+                const hasSettlementSpot = Array.from(this.board.vertices.keys()).some(v => Rules.canPlaceSettlement(this.board, v, p, this.phase, this.gameMode));
                 
                 // LONGEST ROAD STRATEGY: 
                 // Skilled/Master AI will prioritize roads if they are close to taking or need to defend Longest Road
@@ -1469,8 +1715,26 @@ class GameState {
                 const missingSetRes = p.resources.WOOD < 1 || p.resources.BRICK < 1 || p.resources.SHEEP < 1 || p.resources.WHEAT < 1;
                 let canSaveForSettlement = hasSettlementSpot && missingSetRes && !prioritizeRoad;
 
-                // In Expanding mode, bots are much more reckless and will build roads anyway 85% of the time to race for edges
-                if (inExpMode && Math.random() < 0.85) canSaveForSettlement = false;
+                // In Expanding mode or Battle Royale, bots are more reckless with roads to race for edges or the center
+                // In Battle Royale, we basically NEVER want to save for a settlement unless we are already at the goal.
+                const brGoalDist = (p.settlements.length > 0 || p.cities.length > 0) ? 
+                    Math.min(...[...p.settlements, ...p.cities].map(id => this.board.getVertexRing(id))) : 20;
+
+                if (this.gameMode === 'Battle Royale') {
+                    // EMERGENCY: If our structures are on the edge, we MUST save for a settlement to escape.
+                    const structures = [...p.settlements, ...p.cities];
+                    const isOnEdge = structures.some(id => this.board.getVertexRing(id) >= this.board.radius - 1);
+                    const isOnlyStructure = structures.length <= 1;
+
+                    if ((isOnEdge || isOnlyStructure) && hasSettlementSpot && missingSetRes) {
+                         // Emergency escape: save resources for the settlement
+                         canSaveForSettlement = true;
+                    } else if (brGoalDist > 3 || Math.random() < 0.95) {
+                        canSaveForSettlement = false;
+                    }
+                } else if (inExpMode && Math.random() < 0.85) {
+                    canSaveForSettlement = false;
+                }
 
                 if (canSaveForSettlement && !overLimit) {
                     if (diff === 'Beginner') {
@@ -1482,25 +1746,27 @@ class GameState {
                         } else { p.waitingForSettlement = false; }
                     } else {
                         // Skilled/Master always save
-                        continue;
+                        // continue; // Commented out to be careful with scope
                     }
+                } else { // Proceed with road build
+                    let bestE;
+                    if (diff === 'Master' || (inBRMode && diff !== 'Beginner')) {
+                        const sortedEdges = allEdges.sort((a,b) => {
+                            const ea = this.board.getEdge(a), eb = this.board.getEdge(b);
+                            const va = Math.max(this.getVertexValue(ea.v1), this.getVertexValue(ea.v2));
+                            const vb = Math.max(this.getVertexValue(eb.v1), this.getVertexValue(eb.v2));
+                            return vb - va;
+                        });
+                        bestE = sortedEdges[0];
+                    } else {
+                        bestE = allEdges[Math.floor(Math.random() * allEdges.length)];
+                    }
+                    this.build('ROAD', bestE);
+                    madeAction = true;
+                    continue;
                 }
-
-                let bestE;
-                if (diff === 'Master') {
-                    bestE = allEdges.reduce((max, curr) => {
-                        const e_curr = this.board.getEdge(curr), e_max = this.board.getEdge(max);
-                        const val_curr = Math.max(this.getVertexValue(e_curr.v1), this.getVertexValue(e_curr.v2));
-                        const val_max = Math.max(this.getVertexValue(e_max.v1), this.getVertexValue(e_max.v2));
-                        return val_curr > val_max ? curr : max;
-                    });
-                } else {
-                    bestE = allEdges[Math.floor(Math.random() * allEdges.length)];
-                }
-                this.build('ROAD', bestE);
-                madeAction = true;
-                continue;
             }
+          }
         }
 
         // 5. BUY DEV CARD
@@ -1516,8 +1782,18 @@ class GameState {
             if (overLimit) shouldBuy = true;
 
             // Don't buy if saving for a city/settlement unless over limit
+            // Survival check for Battle Royale: If on edge or only 1 base, don't gamble on cards if we can build a safe base soon.
+            let inSurvivalMode = false;
+            if (inBRMode && diff !== 'Beginner') {
+                const structures = [...p.settlements, ...p.cities];
+                const isOnEdge = structures.some(id => this.board.getVertexRing(id) >= this.board.radius - 1);
+                if (isOnEdge || structures.length <= 1) inSurvivalMode = true;
+            }
+
             if (shouldBuy && (!needs.includes('ORE') && !needs.includes('SHEEP') && !needs.includes('WHEAT') || overLimit)) {
-                if (this.buyDevCard(p)) {
+                if (inSurvivalMode && !overLimit) {
+                    // Skip dev cards in survival mode unless we have way too many resources
+                } else if (this.buyDevCard(p)) {
                     madeAction = true;
                     continue;
                 }
@@ -1567,9 +1843,10 @@ class GameState {
     if (tot === 7) {
       this.log('Roll 7!');
       this.waitingForDiscards = [];
+      const discardLimit = (this.gameMode === 'Battle Royale' ? this.brDiscardLimit : 7);
       this.players.forEach(p => {
         const totalRes = Object.values(p.resources).reduce((a,b) => a+b, 0);
-        if (totalRes > 7) {
+        if (totalRes > discardLimit) {
             const count = Math.ceil(totalRes / 2);
             this.waitingForDiscards.push(p.id);
             if (p.isBot) {
@@ -1723,25 +2000,31 @@ class GameState {
     this.movingRobber = false;
     this.selectedRobberIdx = null;
 
-    const h = this.board.hexes.get(hexId);
-    this.log(`Robber moved from ${this.board.hexes.get(oldPos).terrain.name} to ${h.terrain.name}`);
+    const oldHex = this.board.hexes.get(oldPos);
+    const newHex = this.board.hexes.get(hexId);
+    const oldName = oldHex ? oldHex.terrain.name : "the abyss";
+    const newName = newHex ? newHex.terrain.name : "the unknown";
+
+    this.log(`Robber moved from ${oldName} to ${newName}`);
 
     // Find players to rob
     const victims = [];
-    h.vertices.forEach(vk => {
-      const v = this.board.getVertex(vk);
-      if (v.ownerId !== null && v.ownerId !== this.currentPlayerIdx) {
-        const victim = this.players[v.ownerId];
-        // Friendly robber check: only rob players with > 2 points
-        if (this.friendlyRobber && victim.victoryPoints <= 2) return;
-        
-        // Only add if they have resources to steal
-        const totalRes = Object.values(victim.resources).reduce((a, b) => a + b, 0);
-        if (totalRes > 0 && !victims.includes(victim)) {
-          victims.push(victim);
-        }
-      }
-    });
+    if (newHex) {
+        newHex.vertices.forEach(vk => {
+          const v = this.board.getVertex(vk);
+          if (v && v.ownerId !== null && v.ownerId !== this.currentPlayerIdx) {
+            const victim = this.players[v.ownerId];
+            // Friendly robber check: only rob players with > 2 points
+            if (this.friendlyRobber && victim.victoryPoints <= 2) return;
+            
+            // Only add if they have resources to steal
+            const totalRes = Object.values(victim.resources).reduce((a, b) => a + b, 0);
+            if (totalRes > 0 && !victims.includes(victim)) {
+              victims.push(victim);
+            }
+          }
+        });
+    }
 
     if (victims.length === 0) {
       this.log("No valid players to rob.");
@@ -1931,7 +2214,7 @@ class GameState {
     let success = false;
     if (this.phase === 'INITIAL') {
       if (type === 'SETTLEMENT' && !this.pendingSettlement) {
-        if (this.board.getVertex(id).ownerId === null) {
+        if (Rules.canPlaceSettlement(this.board, id, p, this.phase, this.gameMode)) {
           const v = this.board.getVertex(id);
           v.ownerId = p.id; p.settlements.push(id);
           p.totalSettlementsBuilt++;
@@ -1957,12 +2240,12 @@ class GameState {
         }
       }
     } else if (this.hasRolled) {
-      if (type === 'SETTLEMENT' && p.canAfford(COSTS.SETTLEMENT) && Rules.canPlaceSettlement(this.board, id, p, 'PLAY')) {
+      if (type === 'SETTLEMENT' && p.canAfford(COSTS.SETTLEMENT) && Rules.canPlaceSettlement(this.board, id, p, this.phase, this.gameMode)) {
         this.board.getVertex(id).ownerId = p.id; p.settlements.push(id); 
         p.totalSettlementsBuilt++;
         this.returnResources(p, COSTS.SETTLEMENT); this.log('Built Settlement');
         success = true;
-      } else if (type === 'ROAD' && p.canAfford(COSTS.ROAD) && Rules.canPlaceRoad(this.board, id, p)) {
+      } else if (type === 'ROAD' && p.canAfford(COSTS.ROAD) && Rules.canPlaceRoad(this.board, id, p, this.phase, this.gameMode)) {
         this.board.getEdge(id).ownerId = p.id; p.roads.push(id); 
         p.totalRoadsBuilt++;
         this.returnResources(p, COSTS.ROAD); this.log('Built Road');
@@ -2012,7 +2295,7 @@ class GameState {
   aiInitial() {
     if (gameSync.isMultiplayer && !gameSync.isHost) return;
     const keys = Array.from(this.board.vertices.keys()).filter(k => 
-      Rules.canPlaceSettlement(this.board, k, this.currentPlayer, 'INITIAL')
+      Rules.canPlaceSettlement(this.board, k, this.currentPlayer, 'INITIAL', this.gameMode)
     );
     if (keys.length === 0) {
       this.log(`${this.currentPlayer.name} found no space to build.`);
@@ -2112,6 +2395,16 @@ class GameState {
     this.players.forEach(p => {
         if (p.isEliminated || p.id === -1) return;
 
+        // BATTLE ROYALE: Primary check is the presence of structures
+        if (this.gameMode === 'Battle Royale') {
+            if (p.settlements.length === 0 && p.cities.length === 0) {
+                this.log(`💀 ${p.name} has been wiped out and eliminated!`);
+                p.isEliminated = true;
+                this.destroyPlayerPieces(p);
+                return;
+            }
+        }
+
         // Condition 1: Can they generate resources?
         let hasPotentialIncome = false;
         const structures = [...p.settlements, ...p.cities];
@@ -2133,45 +2426,74 @@ class GameState {
                             p.canAfford(COSTS.SETTLEMENT) || 
                             p.canAfford(COSTS.CITY) || 
                             p.canAfford(COSTS.DEV_CARD);
+        
+        if (canBuildNow) return; // Not eliminated if they have resources to build something
 
-        if (canBuildNow) return; // Not eliminated if they can still build
-
-        // Condition 3: Can they trade anything right now?
-        // Check for specific ports or bank 4:1
-        let hasGenericPort = false;
-        const specificPorts = new Set();
-        structures.forEach(vId => {
-            const v = this.board.getVertex(vId);
-            if (v && v.port) {
-                if (v.port === '?') hasGenericPort = true;
-                else if (typeof v.port === 'string') specificPorts.add(v.port);
-            }
-        });
-
-        let canTrade = false;
+        // Condition 3: Can they trade to get what they need?
         const resources = ['WOOD', 'BRICK', 'SHEEP', 'WHEAT', 'ORE'];
-        resources.forEach(r => {
-            const amt = p.resources[r] || 0;
-            if (amt >= 4) canTrade = true;
-            if (hasGenericPort && amt >= 3) canTrade = true;
-            if (specificPorts.has(r) && amt >= 2) canTrade = true;
-        });
+        for (const res of resources) {
+            const rate = this.getTradeRate(p, res);
+            if (p.resources[res] >= rate) return; // Can still trade for something
+        }
 
-        if (canTrade) return; // Not eliminated if they can still trade to find a solution
-
-        // If you have no income, can't build, and can't trade, you are out.
+        this.log(`💀 ${p.name} has no resources or buildable terrain left and is eliminated.`);
         p.isEliminated = true;
-        this.log(`💀 ELIMINATION: ${p.name} has no income and no remaining moves. They have been consumed by the sands.`);
+        this.destroyPlayerPieces(p);
     });
 
     const activePlayers = this.players.filter(p => !p.isEliminated);
     if (activePlayers.length === 0 && !this.winner) {
-        this.winner = { name: "The Desert", id: -1, color: "#f4a460", isEnvironment: true };
-        this.log("🏜️ TOTAL DEFEAT: All players have been eliminated. The Desert wins.");
+        this.winner = { name: (this.gameMode === 'Battle Royale' ? "The Circle" : "The Desert"), id: -1, color: "#f4a460", isEnvironment: true };
+        this.log(`🏜️ TOTAL DEFEAT: All players have been eliminated. ${this.winner.name} wins.`);
+    } else if (this.gameMode === 'Battle Royale' && activePlayers.length === 1 && this.phase === 'PLAY' && !this.winner) {
+        this.winner = activePlayers[0];
+        this.winner.id = activePlayers[0].id;
+        this.log(`🏆 VICTORY ROYALE! ${this.winner.name} is the last survivor!`);
     }
   }
 
+  destroyPlayerPieces(player) {
+    this.board.vertices.forEach(v => {
+        if (v.ownerId === player.id) {
+            v.ownerId = null; v.isCity = false;
+        }
+    });
+    this.board.edges.forEach(e => {
+        if (e.ownerId === player.id) e.ownerId = null;
+    });
+    player.settlements = []; player.cities = []; player.roads = [];
+  }
+
   checkWinner() { 
+    if (this.gameMode === 'Battle Royale') {
+        // Only allow a winner when board has fully shrunk
+        if (this.board.radius > 2) return;
+
+        const winners = this.players.filter(p => {
+            if (p.id === -1 || p.isEliminated) return false;
+            // Winner if they have ANY settlement/city in the center 2-radius board (Ring 0, 1, or 2)
+            const pieces = [...p.settlements, ...p.cities];
+            return pieces.some(vKey => this.board.getVertexRing(vKey) <= 2);
+        });
+
+        if (winners.length > 0) {
+            // In the rare case of simultaneous multiple winners, the first one in the list (or current player if they are one of them) wins
+            this.winner = winners.includes(this.currentPlayer) ? this.currentPlayer : winners[0];
+            this.log(`🏆 THE CENTER HAS BEEN REACHED! ${this.winner.name} wins Battle Royale!`);
+            
+            // If only bots mode, restart after 5 seconds
+            const allBots = this.players.filter(pl => pl.id !== -1).every(pl => pl.isBot);
+            if (allBots) {
+                this.log(`Game Over! Restarting in 5s...`);
+                setTimeout(() => {
+                    const replayBtn = document.getElementById('replayBtn');
+                    if (replayBtn) replayBtn.click();
+                }, 5000);
+            }
+        }
+        return;
+    }
+
     this.players.forEach(p => { 
         if (p.id === -1) return; // "The Desert" is not a player
         if (p.calculateVP(this.longestRoadHolderId, this.largestArmyHolderId) >= this.targetScore) {
@@ -2182,7 +2504,10 @@ class GameState {
                 if (allBots) {
                     this.log(`Game Over! Restarting in 5s...`);
                     // Use the replay button's logic which preserves the Only Bots settings
-                    setTimeout(() => document.getElementById('replayBtn').click(), 5000);
+                    setTimeout(() => {
+                        const replayBtn = document.getElementById('replayBtn');
+                        if (replayBtn) replayBtn.click();
+                    }, 5000);
                 }
             }
         }
@@ -2250,8 +2575,56 @@ class CanvasRenderer {
     this.board.hexes.forEach((h, id) => {
       const p = this.board.hexToPixel(h.q, h.r);
       const px = p.x, py = p.y;
+      
+      // Battle Royale: Highlight the "Winner's Circle" (Center 2 radius) boundary
+      const ring = Math.max(Math.abs(h.q), Math.abs(h.r), Math.abs(-h.q - h.r));
+      const isWinnerCircle = gs.gameMode === 'Battle Royale' && ring <= 2;
+
       this.drawPoly(px, py, 6, this.board.hexSize, h.terrain.color, isHumanTurn && hover?.id === `${h.q},${h.r}`);
       
+      if (isWinnerCircle) {
+          const neighbors = [
+              {q: h.q+1, r: h.r},   // East
+              {q: h.q,   r: h.r+1}, // South
+              {q: h.q-1, r: h.r+1}, // SW
+              {q: h.q-1, r: h.r},   // West
+              {q: h.q,   r: h.r-1}, // North
+              {q: h.q+1, r: h.r-1}  // NE
+          ];
+
+          this.ctx.save();
+          // Adjust size slightly inward to ensure it stays on the hex and isn't clipped
+          const s = this.board.hexSize - 4;
+          neighbors.forEach((nb, i) => {
+              const nbKey = `${nb.q},${nb.r}`;
+              const neighbor = this.board.hexes.get(nbKey);
+              // If neighbor is outside Ring 2 or doesn't exist, this is a boundary side
+              const nbRing = neighbor ? Math.max(Math.abs(nb.q), Math.abs(nb.r), Math.abs(-nb.q - nb.r)) : 100;
+
+              if (nbRing > 2) {
+                  const a1 = 2 * Math.PI * i / 6;
+                  const a2 = 2 * Math.PI * (i + 1) / 6;
+                  
+                  // Add a dark stroke underneath the gold dash to ensure visibility on all backgrounds
+                  this.ctx.strokeStyle = '#000'; this.ctx.lineWidth = 6;
+                  this.ctx.beginPath();
+                  this.ctx.moveTo(px + s * Math.cos(a1), py + s * Math.sin(a1));
+                  this.ctx.lineTo(px + s * Math.cos(a2), py + s * Math.sin(a2));
+                  this.ctx.stroke();
+
+                  // Draw the gold dash on top
+                  this.ctx.strokeStyle = '#ffd700'; this.ctx.lineWidth = 4;
+                  this.ctx.setLineDash([12, 6]);
+                  this.ctx.beginPath();
+                  this.ctx.moveTo(px + s * Math.cos(a1), py + s * Math.sin(a1));
+                  this.ctx.lineTo(px + s * Math.cos(a2), py + s * Math.sin(a2));
+                  this.ctx.stroke();
+                  this.ctx.setLineDash([]);
+              }
+          });
+          this.ctx.restore();
+      }
+
       // Draw number circle (including blank one for Desert)
       this.ctx.fillStyle = '#fff';
       this.ctx.strokeStyle = '#000';
@@ -2268,32 +2641,6 @@ class CanvasRenderer {
         this.ctx.textBaseline = 'middle';
         this.ctx.fillText(h.number, px, py);
       }
-      
-      // Draw Robber(s)
-      const robberIdx = gs.robberHexIds.indexOf(id);
-      if (robberIdx !== -1) {
-        const isSelected = gs.selectedRobberIdx === robberIdx;
-        this.ctx.fillStyle = isSelected ? 'cyan' : 'rgba(50,50,50,0.8)';
-        this.ctx.beginPath(); this.ctx.arc(px, py + 10, 10, 0, Math.PI*2); this.ctx.fill();
-        this.ctx.strokeStyle = isSelected ? '#000' : '#fff'; this.ctx.lineWidth = 2; this.ctx.stroke();
-      }
-
-      // Selection/Placement highlight
-      if (gs.movingRobber && !gs.currentPlayer.isBot) {
-        if (gs.multiRobber && gs.selectedRobberIdx === null) {
-          // Highlight existing robbers to pick one
-          if (robberIdx !== -1) {
-            this.ctx.strokeStyle = 'cyan'; this.ctx.lineWidth = 3;
-            this.ctx.beginPath(); this.ctx.arc(px, py + 10, 15, 0, Math.PI*2); this.ctx.stroke();
-          }
-        } else if (!gs.robberHexIds.includes(id)) {
-          // Highlight placement destinations
-          this.ctx.strokeStyle = 'cyan'; this.ctx.lineWidth = 3;
-          this.ctx.setLineDash([5, 5]);
-          this.ctx.beginPath(); this.ctx.arc(px, py, 43, 0, Math.PI*2); this.ctx.stroke();
-          this.ctx.setLineDash([]);
-        }
-      }
     });
 
     this.board.edges.forEach(e => {
@@ -2302,9 +2649,13 @@ class CanvasRenderer {
       const canAffordRoad = (gs.phase === 'INITIAL' && gs.pendingSettlement) || (gs.phase === 'PLAY' && gs.hasRolled && gs.currentPlayer.canAfford(COSTS.ROAD));
       
       let isValidRoad = false;
-      if (isHumanTurn && !isOwned && canAffordRoad) {
-        if (gs.phase === 'INITIAL') isValidRoad = (e.v1 === gs.pendingSettlement || e.v2 === gs.pendingSettlement);
-        else isValidRoad = Rules.canPlaceRoad(this.board, e.id, gs.currentPlayer);
+      if (isHumanTurn && !isOwned) {
+        if (gs.pendingRoads > 0) {
+            isValidRoad = Rules.canPlaceRoad(this.board, e.id, gs.currentPlayer, gs.phase, gs.gameMode);
+        } else if (canAffordRoad) {
+            if (gs.phase === 'INITIAL') isValidRoad = (e.v1 === gs.pendingSettlement || e.v2 === gs.pendingSettlement);
+            else isValidRoad = Rules.canPlaceRoad(this.board, e.id, gs.currentPlayer, gs.phase, gs.gameMode);
+        }
       }
       
       const x1 = v1.x, y1 = v1.y, x2 = v2.x, y2 = v2.y;
@@ -2318,9 +2669,12 @@ class CanvasRenderer {
         this.ctx.lineWidth = 6;
         this.ctx.stroke();
       } else if (isHumanTurn && hover?.id === e.id) {
-        this.ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-        this.ctx.lineWidth = 6;
-        this.ctx.beginPath(); this.ctx.moveTo(x1, y1); this.ctx.lineTo(x2, y2); this.ctx.stroke();
+        let showHover = (gs.pendingRoads <= 0 || Rules.canPlaceRoad(this.board, e.id, gs.currentPlayer, gs.phase, gs.gameMode));
+        if (showHover) {
+            this.ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+            this.ctx.lineWidth = 6;
+            this.ctx.beginPath(); this.ctx.moveTo(x1, y1); this.ctx.lineTo(x2, y2); this.ctx.stroke();
+        }
       }
 
       // Draw buildable highlight
@@ -2360,8 +2714,13 @@ class CanvasRenderer {
         const px = v.x, py = v.y;
         const isOwned = v.ownerId !== null;
         const canAffordSettle = (gs.phase === 'INITIAL' && !gs.pendingSettlement) || (gs.phase === 'PLAY' && gs.hasRolled && gs.currentPlayer.canAfford(COSTS.SETTLEMENT));
-        const canSettle = (isHumanTurn && !isOwned && canAffordSettle && Rules.canPlaceSettlement(this.board, v.id, gs.currentPlayer, gs.phase));
-        const canUpgrade = (isHumanTurn && isOwned && v.ownerId === gs.currentPlayerIdx && !v.isCity && gs.currentPlayer.canAfford(COSTS.CITY) && gs.hasRolled);
+        let canSettle = (isHumanTurn && !isOwned && canAffordSettle && Rules.canPlaceSettlement(this.board, v.id, gs.currentPlayer, gs.phase, gs.gameMode));
+        let canUpgrade = (isHumanTurn && isOwned && v.ownerId === gs.currentPlayerIdx && !v.isCity && gs.currentPlayer.canAfford(COSTS.CITY) && gs.hasRolled);
+
+        if (gs.pendingRoads > 0) {
+            canSettle = false;
+            canUpgrade = false;
+        }
 
         if (isOwned) {
             this.ctx.fillStyle = gs.players[v.ownerId].color;
@@ -2373,7 +2732,7 @@ class CanvasRenderer {
             } else { 
                 this.ctx.beginPath(); this.ctx.arc(px, py, 9, 0, Math.PI*2); this.ctx.fill(); this.ctx.stroke(); 
             }
-        } else if (isHumanTurn && hover?.id === v.id) {
+        } else if (isHumanTurn && hover?.id === v.id && gs.pendingRoads <= 0) {
             this.ctx.fillStyle = 'rgba(255,255,255,0.5)'; this.ctx.beginPath(); this.ctx.arc(px, py, 8, 0, Math.PI*2); this.ctx.fill();
         }
 
@@ -2391,6 +2750,55 @@ class CanvasRenderer {
           this.ctx.globalAlpha = 1.0;
         }
     });
+
+    // --- Draw Robbers (On top of everything built) ---
+    this.board.hexes.forEach((h, id) => {
+      const p = this.board.hexToPixel(h.q, h.r);
+      const px = p.x, py = p.y;
+      
+      const robberIdx = gs.robberHexIds.indexOf(id);
+      if (robberIdx !== -1) {
+        const isSelected = gs.selectedRobberIdx === robberIdx;
+        this.ctx.fillStyle = isSelected ? 'cyan' : 'rgba(50,50,50,0.8)';
+        this.ctx.beginPath(); this.ctx.arc(px, py + 10, 10, 0, Math.PI*2); this.ctx.fill();
+        this.ctx.strokeStyle = isSelected ? '#000' : '#fff'; this.ctx.lineWidth = 2; this.ctx.stroke();
+      }
+
+      // Selection/Placement highlight
+      if (gs.movingRobber && !gs.currentPlayer.isBot) {
+        if (gs.multiRobber && gs.selectedRobberIdx === null) {
+          // Highlight existing robbers to pick one
+          if (robberIdx !== -1) {
+            this.ctx.strokeStyle = 'cyan'; this.ctx.lineWidth = 3;
+            this.ctx.beginPath(); this.ctx.arc(px, py + 10, 15, 0, Math.PI*2); this.ctx.stroke();
+          }
+        } else if (!gs.robberHexIds.includes(id)) {
+          // Highlight placement destinations
+          this.ctx.strokeStyle = 'cyan'; this.ctx.lineWidth = 3;
+          this.ctx.setLineDash([5, 5]);
+          this.ctx.beginPath(); this.ctx.arc(px, py, 43, 0, Math.PI*2); this.ctx.stroke();
+          this.ctx.setLineDash([]);
+        }
+      }
+    });
+
+    // --- Draw VFX Effects ---
+    gs.effects.forEach((eff, i) => {
+      if (eff.type === 'pulse') {
+        const progress = eff.life / eff.maxLife;
+        const radius = (1 - progress) * 80;
+        this.ctx.strokeStyle = eff.color;
+        this.ctx.lineWidth = progress * 10;
+        this.ctx.globalAlpha = progress;
+        this.ctx.beginPath();
+        this.ctx.arc(eff.x, eff.y, radius, 0, Math.PI * 2);
+        this.ctx.stroke();
+        this.ctx.globalAlpha = 1.0;
+        eff.life--;
+      }
+    });
+    gs.effects = gs.effects.filter(eff => eff.life > 0);
+
     this.ctx.restore();
 
     // Backdrop for Canvas UI (Action Panel & Stats)
@@ -2517,10 +2925,11 @@ class CanvasRenderer {
     let ly = logoOffset + (isMobile ? 22 : 28);
     const human = gs.players[gameSync.localPlayerId];
     const humanTotal = Object.values(human.resources).reduce((a, b) => a + b, 0);
+    const discardLimit = (gs.gameMode === 'Battle Royale' ? gs.brDiscardLimit : 7);
     
-    this.ctx.fillStyle = humanTotal > 7 ? '#ff4444' : '#fff'; // Red if at risk
+    this.ctx.fillStyle = humanTotal > discardLimit ? '#ff4444' : '#fff'; // Red if at risk
     this.ctx.font = isMobile ? 'bold 10px Arial' : 'bold 11px Arial';
-    this.ctx.fillText(humanTotal > 7 ? 'YOUR RESOURCES: ⚠️' : 'YOUR RESOURCES:', 20, ly);
+    this.ctx.fillText(humanTotal > discardLimit ? 'YOUR RESOURCES: ⚠️' : 'YOUR RESOURCES:', 20, ly);
     
     this.ctx.font = isMobile ? '9px Arial' : '11px Arial';
     const resources = ['WOOD', 'BRICK', 'SHEEP', 'WHEAT', 'ORE'];
@@ -2577,18 +2986,21 @@ class CanvasRenderer {
     this.ctx.font = isMobile ? 'bold 11px Arial' : 'bold 14px Arial';
     this.ctx.fillText('GAME STATS', rx + 15, ry + 15);
 
-    // Desert percentage and radius for expanding board
+    // Desert percentage, radius, and turn tracking
     let statusText = "";
     if (gs.gameMode === 'Expanding Board (Experimental)') {
         const hexes = Array.from(gs.board.hexes.values());
         const desertCount = hexes.filter(h => h.terrain === HEX_TYPES.DESERT).length;
         const desertPct = Math.round((desertCount / hexes.length) * 100);
-        statusText = `Radius: ${gs.board.radius} | Desert: ${desertPct}% | Turns: ${gs.rotations}`;
+        statusText = `R:${gs.board.radius} | D:${desertPct}% | T:${gs.totalTurns} (R:${gs.rotations})`;
+    } else if (gs.gameMode === 'Battle Royale') {
+        statusText = `R:${gs.board.radius} | T:${gs.totalTurns} (R:${gs.rotations})`;
     } else {
-        statusText = `Turns: ${gs.rotations}`;
+        statusText = `Turns: ${gs.totalTurns} (R:${gs.rotations})`;
     }
     
-    this.ctx.fillStyle = (gs.gameMode === 'Expanding Board (Experimental)') ? '#f4a460' : '#fff';
+    this.ctx.fillStyle = (gs.gameMode === 'Expanding Board (Experimental)') ? '#f4a460' : 
+                         (gs.gameMode === 'Battle Royale' ? '#e74c3c' : '#fff');
     this.ctx.font = isMobile ? 'bold 9px Arial' : 'bold 11px Arial';
     const textWidth = this.ctx.measureText(statusText).width;
     this.ctx.fillText(statusText, rx + STATS_WIDTH - textWidth - 15, ry + 15);
@@ -2597,35 +3009,49 @@ class CanvasRenderer {
     this.ctx.font = isMobile ? '8px Arial' : '10px Arial';
     this.ctx.fillStyle = '#aaa';
     this.ctx.fillText('PLAYER', rx + 15, ry + (isMobile ? 30 : 40));
-    this.ctx.fillText('VP', rx + (isMobile ? 100 : 160), ry + (isMobile ? 30 : 40));
+    this.ctx.fillText(gs.gameMode === 'Battle Royale' ? 'RING' : 'VP', rx + (isMobile ? 100 : 160), ry + (isMobile ? 30 : 40));
     this.ctx.fillText('RD', rx + (isMobile ? 123 : 188), ry + (isMobile ? 30 : 40));
     this.ctx.fillText('DEV', rx + (isMobile ? 143 : 213), ry + (isMobile ? 30 : 40));
     this.ctx.fillText('RES', rx + (isMobile ? 168 : 253), ry + (isMobile ? 30 : 40));
 
     let py = ry + (isMobile ? 45 : 60);
     gs.players.forEach(p => {
-      this.ctx.fillStyle = p.color;
+      this.ctx.fillStyle = p.isEliminated ? '#444' : p.color; // Darken if eliminated
       this.ctx.font = isMobile ? 'bold 10px Arial' : 'bold 12px Arial';
       let nameText = p.name;
       if (gs.longestRoadHolderId === p.id) nameText += ' 🏆';
       if (gs.largestArmyHolderId === p.id) nameText += ' ⚔️';
+      if (p.isEliminated) nameText = '💀 ' + nameText;
       this.ctx.fillText(nameText.substring(0, isMobile ? 10 : 20), rx + 15, py);
       
-      this.ctx.fillStyle = '#fff';
+      this.ctx.fillStyle = p.isEliminated ? '#444' : '#fff';
       this.ctx.font = isMobile ? '10px Arial' : '12px Arial';
       
-      let vpText = `${p.visibleVP}`;
-      const vpCardsCount = p.devCards.filter(c => c.type === 'VP').length;
-      if (vpCardsCount > 0 && (p.id === gameSync.localPlayerId || gs.winner)) {
-        vpText += ` (${p.visibleVP + vpCardsCount})`;
+      let statValue = "";
+      if (gs.gameMode === 'Battle Royale') {
+          const pieces = [...p.settlements, ...p.cities];
+          if (pieces.length === 0) {
+              statValue = "—";
+          } else {
+              const bestRing = Math.min(...pieces.map(vk => gs.board.getVertexRing(vk)));
+              statValue = bestRing === 0 ? "★" : bestRing.toString();
+          }
+      } else {
+          let vpText = `${p.visibleVP}`;
+          const vpCardsCount = p.devCards.filter(c => c.type === 'VP').length;
+          if (vpCardsCount > 0 && (p.id === gameSync.localPlayerId || gs.winner)) {
+            vpText += ` (${p.visibleVP + vpCardsCount})`;
+          }
+          statValue = vpText;
       }
-      this.ctx.fillText(vpText, rx + (isMobile ? 100 : 160), py);
+      this.ctx.fillText(statValue, rx + (isMobile ? 100 : 160), py);
 
       this.ctx.fillText(gs.calculateLongestPath(p.id), rx + (isMobile ? 123 : 188), py);
       this.ctx.fillText(p.devCards.length.toString(), rx + (isMobile ? 143 : 213), py);
       const totalRes = Object.values(p.resources).reduce((a, b) => a + b, 0);
+      const discardLimit = (gs.gameMode === 'Battle Royale' ? gs.brDiscardLimit : 7);
       
-      if (totalRes > 7) {
+      if (totalRes > discardLimit) {
         this.ctx.fillStyle = '#ff4444'; // Red for danger
         this.ctx.font = isMobile ? 'bold 10px Arial' : 'bold 12px Arial';
         this.ctx.fillText(totalRes + ' ⚠️', rx + (isMobile ? 168 : 253), py);
@@ -2887,7 +3313,7 @@ class InputHandler {
     } else if (this.gs.pendingRoads > 0) {
         if (this.hover.type === 'edge') {
             const e = this.board.getEdge(this.hover.id);
-            if (e.ownerId === null && Rules.canPlaceRoad(this.board, this.hover.id, this.gs.players[gameSync.localPlayerId])) {
+            if (e.ownerId === null && Rules.canPlaceRoad(this.board, this.hover.id, this.gs.players[gameSync.localPlayerId], this.gs.phase, this.gs.gameMode)) {
                 e.ownerId = gameSync.localPlayerId; 
                 this.gs.players[gameSync.localPlayerId].roads.push(this.hover.id);
                 this.gs.updateLongestRoad();
@@ -2949,8 +3375,8 @@ const winHost = document.getElementById('winPointsHost');
 const winHostVal = document.getElementById('winPointsValueHost');
 
 function updateMenuOptions() {
-  const limits = { '1': 8, '2': 15, '3': 25, '4': 35, '5': 50, '19': 100 };
-  const playerCap = { '1': 3, '2': 4, '3': 6, '4': 8, '5': 10, '19': 38 };
+  const limits = { '1': 8, '2': 15, '3': 25, '4': 35, '5': 50, '19': 100, '20': 100 };
+  const playerCap = { '1': 3, '2': 4, '3': 6, '4': 8, '5': 10, '19': 38, '20': 40 };
 
   const isExpSolo = (gmSolo && gmSolo.value === 'Expanding Board (Experimental)');
   const isExpHost = (gmHost && gmHost.value === 'Expanding Board (Experimental)');
@@ -3006,6 +3432,21 @@ function updateMenuOptions() {
   const dDecayH = document.getElementById('desertDecayHost');
   const dDecayValH = document.getElementById('desertDecayValueHost');
   if (dDecayH && dDecayValH) dDecayValH.innerText = dDecayH.value;
+
+  // Battle Royale labels
+  const brGraceS = document.getElementById('brGraceSolo');
+  const brGraceValS = document.getElementById('brGraceValueSolo');
+  if (brGraceS && brGraceValS) brGraceValS.innerText = brGraceS.value;
+  const brGraceH = document.getElementById('brGraceHost');
+  const brGraceValH = document.getElementById('brGraceValueHost');
+  if (brGraceH && brGraceValH) brGraceValH.innerText = brGraceH.value;
+
+  const brDiscardS = document.getElementById('brDiscardSolo');
+  const brDiscardValS = document.getElementById('brDiscardValueSolo');
+  if (brDiscardS && brDiscardValS) brDiscardValS.innerText = brDiscardS.value;
+  const brDiscardH = document.getElementById('brDiscardHost');
+  const brDiscardValH = document.getElementById('brDiscardValueHost');
+  if (brDiscardH && brDiscardValH) brDiscardValH.innerText = brDiscardH.value;
 }
 
 if (boardSolo) boardSolo.onchange = updateMenuOptions;
@@ -3018,6 +3459,10 @@ document.getElementById('desertNewSolo').oninput = updateMenuOptions;
 document.getElementById('desertDecaySolo').oninput = updateMenuOptions;
 document.getElementById('desertNewHost').oninput = updateMenuOptions;
 document.getElementById('desertDecayHost').oninput = updateMenuOptions;
+document.getElementById('brGraceSolo').oninput = updateMenuOptions;
+document.getElementById('brGraceHost').oninput = updateMenuOptions;
+document.getElementById('brDiscardSolo').oninput = updateMenuOptions;
+document.getElementById('brDiscardHost').oninput = updateMenuOptions;
 
 // Toggle board size visibility based on game mode
 const gmSolo = document.getElementById('gameModeSolo');
@@ -3028,13 +3473,22 @@ const eiSoloGroup = document.getElementById('expansionIntervalSoloGroup');
 const eiHostGroup = document.getElementById('expansionIntervalHostGroup');
 const edSoloGroup = document.getElementById('expansionDesertSoloGroup');
 const edHostGroup = document.getElementById('expansionDesertHostGroup');
+const brSoloOptions = document.getElementById('brOptionsSolo');
+const brHostOptions = document.getElementById('brOptionsHost');
 
 function updateModeVisibility() {
-    if (gmSolo && bsSoloGroup && eiSoloGroup && edSoloGroup) {
+    if (gmSolo && bsSoloGroup && eiSoloGroup && edSoloGroup && brSoloOptions) {
         const isExp = (gmSolo.value === 'Expanding Board (Experimental)');
-        bsSoloGroup.style.display = isExp ? 'none' : 'block';
+        const isBR = (gmSolo.value === 'Battle Royale');
+        bsSoloGroup.style.display = (isExp || isBR) ? 'none' : 'block';
         eiSoloGroup.style.display = isExp ? 'block' : 'none';
         edSoloGroup.style.display = isExp ? 'block' : 'none';
+        brSoloOptions.style.display = isBR ? 'block' : 'none';
+        
+        if (isBR) {
+            document.getElementById('boardSizeSolo').value = "20";
+            document.getElementById('aiCount').value = "39";
+        }
         
         const wpInput = document.getElementById('winPointsSolo');
         const wpValue = document.getElementById('winPointsValueSolo');
@@ -3046,11 +3500,17 @@ function updateModeVisibility() {
             }
         }
     }
-    if (gmHost && bsHostGroup && eiHostGroup && edHostGroup) {
+    if (gmHost && bsHostGroup && eiHostGroup && edHostGroup && brHostOptions) {
         const isExp = (gmHost.value === 'Expanding Board (Experimental)');
-        bsHostGroup.style.display = isExp ? 'none' : 'block';
+        const isBR = (gmHost.value === 'Battle Royale');
+        bsHostGroup.style.display = (isExp || isBR) ? 'none' : 'block';
         eiHostGroup.style.display = isExp ? 'block' : 'none';
         edHostGroup.style.display = isExp ? 'block' : 'none';
+        brHostOptions.style.display = isBR ? 'block' : 'none';
+
+        if (isBR) {
+            document.getElementById('boardSizeHost').value = "20";
+        }
 
         const wpInput = document.getElementById('winPointsHost');
         const wpValue = document.getElementById('winPointsValueHost');
@@ -3575,7 +4035,10 @@ class GameSync {
             const matches = [];
             querySnapshot.forEach((doc) => {
                 const data = doc.data();
-                // Basic validation: only show games with players
+
+                // Skip private matches and those with no players
+                if (data.isPrivate === true) return;
+
                 if (data.players && data.players.length > 0) {
                     matches.push({
                         id: doc.id,
@@ -3618,11 +4081,18 @@ class GameSync {
                     const mr = initialConfig?.multiRobber || false;
                     const gm = initialConfig?.gameMode || 'Standard';
                     const ei = initialConfig?.expansionInterval || '2';
+                    const brsi = initialConfig?.brShrinkInterval || 3;
+                    const brgr = initialConfig?.brGraceRotations || 5;
+                    const brdl = initialConfig?.brDiscardLimit || 16;
+                    const isPrivate = initialConfig?.isPrivate || false;
 
                     const p0 = new Player(0, myName, PLAYER_COLORS[0], false);
                     const initialBoard = new Board(br);
-                    const initialGs = new GameState(initialBoard, [p0], wp, fr, "Skilled", mr, gm, ei);
-                    transaction.set(this.gameRef, initialGs.toJSON());
+                    const initialGs = new GameState(initialBoard, [p0], wp, fr, "Skilled", mr, gm, ei, 0.1, 0.2, brsi, brgr, brdl);
+                    const data = initialGs.toJSON();
+                    data.isPrivate = isPrivate; // Store private flag at root of document
+                    
+                    transaction.set(this.gameRef, data);
                 } else {
                     const data = doc.data();
                     const tempGs = GameState.fromJSON(data);
@@ -3851,7 +4321,7 @@ function getProfileName() {
 function resetGame(config) {
   lastGameConfig = config;
   isOnlyBotsMode = config.onlyBots;
-  let { aiCount, boardRadius, winPoints, friendlyRobber, multiRobber, aiDifficulty, onlyBots, gameMode, expansionInterval, desertNewChance, desertDecayChance } = config;
+  let { aiCount, boardRadius, winPoints, friendlyRobber, multiRobber, aiDifficulty, onlyBots, gameMode, expansionInterval, desertNewChance, desertDecayChance, brShrinkInterval, brGraceRotations, brDiscardLimit } = config;
   
   // Enforce minimum 14 VP for Expanding Board
   if (gameMode === 'Expanding Board (Experimental)' && winPoints < 14) {
@@ -3864,7 +4334,20 @@ function resetGame(config) {
   gameSync.saveSession();
 
   // Update rule text
-  document.getElementById('ruleWinPoints').innerHTML = `<strong>Victory:</strong> Reach ${winPoints} points.`;
+  const ruleWinEl = document.getElementById('ruleWinPoints');
+  const ruleRobberEl = document.getElementById('ruleRobber7');
+  
+  if (gameMode === 'Battle Royale') {
+      ruleWinEl.innerHTML = `<strong>Victory:</strong> Reach the Center (Ring 0-1).`;
+      if (ruleRobberEl) {
+          ruleRobberEl.innerHTML = `<strong>The Robber (7):</strong> If you roll a 7, everyone with >${brDiscardLimit} cards must discard half. Then move the robber & steal.`;
+      }
+  } else {
+      ruleWinEl.innerHTML = `<strong>Victory:</strong> Reach ${winPoints} points.`;
+      if (ruleRobberEl) {
+          ruleRobberEl.innerHTML = `<strong>The Robber (7):</strong> If you roll a 7, everyone with >7 cards must discard half. Then move the robber & steal.`;
+      }
+  }
 
   board = new Board(boardRadius);
   let players = [];
@@ -3899,7 +4382,7 @@ function resetGame(config) {
   // Final sanitization of IDs to match indices
   players.forEach((p, idx) => p.id = idx);
 
-  gs = new GameState(board, players, winPoints, friendlyRobber, aiDifficulty, multiRobber, gameMode, expansionInterval, desertNewChance, desertDecayChance);
+  gs = new GameState(board, players, winPoints, friendlyRobber, aiDifficulty, multiRobber, gameMode, expansionInterval, desertNewChance, desertDecayChance, brShrinkInterval, brGraceRotations, brDiscardLimit);
   gs.started = true;
   ren = new CanvasRenderer(canvas, board);
   inp = new InputHandler(canvas, board, gs, ren);
@@ -4044,6 +4527,9 @@ if (startSoloBtn) {
             expansionInterval: document.getElementById('expansionIntervalSolo').value,
             desertNewChance: parseInt(document.getElementById('desertNewSolo').value) / 100,
             desertDecayChance: parseInt(document.getElementById('desertDecaySolo').value) / 100,
+            brShrinkInterval: parseInt(document.getElementById('brShrinkIntervalSolo').value),
+            brGraceRotations: parseInt(document.getElementById('brGraceSolo').value),
+            brDiscardLimit: parseInt(document.getElementById('brDiscardSolo').value),
             boardRadius: (gm === 'Expanding Board (Experimental)') ? 2 : parseInt(document.getElementById('boardSizeSolo').value),
             winPoints: parseInt(document.getElementById('winPointsSolo').value),
             friendlyRobber: document.getElementById('friendlyRobberSolo').checked,
@@ -4083,10 +4569,14 @@ if (createMatchBtn) {
             expansionInterval: document.getElementById('expansionIntervalHost').value,
             desertNewChance: parseInt(document.getElementById('desertNewHost').value) / 100,
             desertDecayChance: parseInt(document.getElementById('desertDecayHost').value) / 100,
+            brShrinkInterval: parseInt(document.getElementById('brShrinkIntervalHost').value),
+            brGraceRotations: parseInt(document.getElementById('brGraceHost').value),
+            brDiscardLimit: parseInt(document.getElementById('brDiscardHost').value),
             boardRadius: (gm === 'Expanding Board (Experimental)') ? 2 : parseInt(document.getElementById('boardSizeHost').value),
             winPoints: parseInt(document.getElementById('winPointsHost').value),
             friendlyRobber: document.getElementById('friendlyRobberHost').checked,
-            multiRobber: document.getElementById('multiRobberHost').checked
+            multiRobber: document.getElementById('multiRobberHost').checked,
+            isPrivate: document.getElementById('privateMatchHost').checked
         };
         await gameSync.joinMatch(mid, (remoteGs) => {
             if (menuOverlay.style.display !== 'none') {
@@ -4186,6 +4676,9 @@ startGameBtn.onclick = async () => {
     expansionInterval: document.getElementById('expansionIntervalHost').value,
     desertNewChance: parseInt(document.getElementById('desertNewHost').value) / 100,
     desertDecayChance: parseInt(document.getElementById('desertDecayHost').value) / 100,
+    brShrinkInterval: parseInt(document.getElementById('brShrinkIntervalHost').value),
+    brGraceRotations: parseInt(document.getElementById('brGraceHost').value),
+    brDiscardLimit: parseInt(document.getElementById('brDiscardHost').value),
     boardRadius: (gm === 'Expanding Board (Experimental)') ? 2 : parseInt(document.getElementById('boardSizeHost').value),
     winPoints: parseInt(document.getElementById('winPointsHost').value),
     friendlyRobber: document.getElementById('friendlyRobberHost').checked,
@@ -4327,6 +4820,21 @@ document.getElementById('resetCamBtn').onclick = () => { if(ren) { ren.camera = 
 
 // Handle accidental disconnects for guests
 window.addEventListener('beforeunload', (e) => {
+    // 1. Only warn and record if there is an ongoing game with human players
+    if (gs && gs.started && !gs.winner) {
+        const hasHuman = gs.players.filter(p => p.id !== -1).some(p => !p.isBot);
+        if (hasHuman) {
+            // Logic for marking statistics as a loss, fulfilling the "same as abandoning" requirement
+            // Record now; if they cancel, they were already warned it counts as an abandonment.
+            recordGameResult(gs);
+
+            // Trigger the browser's standard confirmation dialog
+            const warnMsg = "Refreshing or leaving will exit your current match and count it as an abandonment/loss. Your statistics will reflect this immediately.";
+            e.preventDefault();
+            e.returnValue = warnMsg;
+        }
+    }
+
     if (gameSync.isMultiplayer && gs) {
         // If host, this will (attempt to) delete the match. If guest, it reverts them to a bot.
         // Even if the async call doesn't finish, we rely on the next load's detection to clean up.
@@ -4383,16 +4891,39 @@ function loop() {
   const inRobberActions = gs.movingRobber || gs.waitingToPickVictim;
   const inDiscardActions = gs.waitingForDiscards.length > 0;
   const isWinning = gs.winner !== null;
+
+  // Update turn indicator UI
+  const turnIndicator = document.getElementById('turn-indicator');
+  const turnText = document.getElementById('turn-text');
+  const turnDot = document.getElementById('turn-color-dot');
+  
+  if (gs && !isWinning) {
+      turnIndicator.style.display = 'flex';
+      const activeP = gs.currentPlayer;
+      
+      if (isHumanTurn) {
+          // Extra visual feedback when it's your turn (unless it's just a bot simulation)
+          turnIndicator.className = isOnlyBotsMode ? '' : 'your-turn';
+          turnText.innerText = "YOUR TURN";
+      } else {
+          turnIndicator.className = '';
+          turnText.innerText = `${activeP.name.toUpperCase()}'S TURN`;
+      }
+      turnDot.style.backgroundColor = activeP.color;
+  } else {
+      turnIndicator.style.display = 'none';
+  }
+
   const inTradeActions = gs.activeTrade !== null || isProposingTrade || isTradingWithBank;
   const resources = ['WOOD', 'BRICK', 'SHEEP', 'WHEAT', 'ORE'];
 
   const canTradeBank = isHumanTurn && resources.some(r => gs.currentPlayer.resources[r] >= gs.getTradeRate(gs.currentPlayer, r));
   const canTradePlayer = isHumanTurn && Object.values(gs.currentPlayer.resources).some(v => v > 0);
 
-  rollBtn.disabled = gs.phase!=='PLAY' || !isHumanTurn || gs.hasRolled || inRobberActions || inTradeActions || inDiscardActions || isWinning;
-  endBtn.disabled = gs.phase!=='PLAY' || !isHumanTurn || !gs.hasRolled || inRobberActions || inTradeActions || inDiscardActions || isWinning;
-  bankTradeBtn.disabled = !canTradeBank || gs.phase!=='PLAY' || !isHumanTurn || !gs.hasRolled || inRobberActions || isTradingWithBank || isProposingTrade || inDiscardActions || isWinning;
-  tradeBtn.disabled = !canTradePlayer || gs.phase!=='PLAY' || !isHumanTurn || !gs.hasRolled || inRobberActions || isProposingTrade || isTradingWithBank || inDiscardActions || isWinning;
+  rollBtn.disabled = gs.phase!=='PLAY' || !isHumanTurn || gs.hasRolled || inRobberActions || inTradeActions || inDiscardActions || isWinning || gs.pendingRoads > 0;
+  endBtn.disabled = gs.phase!=='PLAY' || !isHumanTurn || !gs.hasRolled || inRobberActions || inTradeActions || inDiscardActions || isWinning || gs.pendingRoads > 0;
+  bankTradeBtn.disabled = !canTradeBank || gs.phase!=='PLAY' || !isHumanTurn || !gs.hasRolled || inRobberActions || isTradingWithBank || isProposingTrade || inDiscardActions || isWinning || gs.pendingRoads > 0;
+  tradeBtn.disabled = !canTradePlayer || gs.phase!=='PLAY' || !isHumanTurn || !gs.hasRolled || inRobberActions || isProposingTrade || isTradingWithBank || inDiscardActions || isWinning || gs.pendingRoads > 0;
   
   tradePanel.style.display = (gs.phase === 'PLAY' && isHumanTurn && !inRobberActions && !inDiscardActions && isTradingWithBank && !isWinning) ? 'flex' : 'none';
   playerTradePanel.style.display = (gs.phase === 'PLAY' && isHumanTurn && !inRobberActions && !inDiscardActions && isProposingTrade && !isWinning) ? 'flex' : 'none';
@@ -4419,13 +4950,17 @@ function loop() {
               victNameEl.innerText = "THE DESERT WINS!";
               victNameEl.style.color = "#f4a460";
               victNameEl.style.textShadow = "0 0 20px rgba(244, 164, 96, 0.5)";
+          } else if (gs.gameMode === 'Battle Royale') {
+              victNameEl.innerText = `${gs.winner.name.toUpperCase()} REACHED THE CENTER!`;
+              victNameEl.style.color = "gold";
+              victNameEl.style.textShadow = "0 0 20px rgba(255, 215, 0, 0.5)";
           } else {
               victNameEl.innerText = `${gs.winner.name.toUpperCase()} WINS!`;
               victNameEl.style.color = "gold";
               victNameEl.style.textShadow = "0 0 20px rgba(255, 215, 0, 0.5)";
           }
 
-          turnCountEl.innerText = `The game lasted ${gs.rotations} turns.`;
+          turnCountEl.innerText = `The game lasted ${gs.totalTurns} turns (${gs.rotations} rounds).`;
           turnCountEl.style.display = 'block';
           
           const graphContainer = document.getElementById('desert-graph-container');
